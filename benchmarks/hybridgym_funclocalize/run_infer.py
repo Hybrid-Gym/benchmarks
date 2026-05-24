@@ -16,7 +16,6 @@ from jinja2 import Environment, FileSystemLoader
 from benchmarks.hybridgym_funclocalize.config import INFER_DEFAULTS
 from benchmarks.utils.args_parser import add_prompt_path_argument, get_parser
 from benchmarks.utils.console_logging import summarize_instance
-from benchmarks.utils.constants import EVAL_AGENT_SERVER_IMAGE
 from benchmarks.utils.conversation import build_event_persistence_callback
 from benchmarks.utils.critics import create_critic
 from benchmarks.utils.dataset import get_dataset
@@ -48,6 +47,10 @@ logger = get_logger(__name__)
 
 # Docker image for the workspace — generic Python, no specialized environment needed.
 BASE_DOCKER_IMAGE = "python:3.11-bookworm"
+EVAL_AGENT_SERVER_IMAGE = os.getenv(
+    "OPENHANDS_EVAL_AGENT_SERVER_IMAGE",
+    "ghcr.io/yiqingxyq/eval-agent-server",  # Using yiqingxyq's pre-built image
+)
 
 
 def _get_workspace_dir_name(instance: dict) -> str:
@@ -167,7 +170,9 @@ class FuncLocalizeEvaluation(Evaluation):
         forward_env: list[str] | None = None,
     ) -> RemoteWorkspace:
         """Create a generic Docker workspace; clone repo at runtime."""
-        agent_server_image = f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-hybridgym-funclocalize-binary"
+        agent_server_image = (
+            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-hybridgym-funclocalize"
+        )
 
         if self.metadata.workspace_type == "docker":
             workspace = create_docker_workspace(
