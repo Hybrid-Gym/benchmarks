@@ -98,7 +98,7 @@ from benchmarks.utils.build_utils import build_image
 result = build_image(
     base_image='python:3.11-bookworm',
     target_image='${OPENHANDS_EVAL_AGENT_SERVER_IMAGE}',
-    custom_tag='hybridgym-funclocalize',
+    custom_tag='hybridgym',
     target='binary',
     push=True,
 )

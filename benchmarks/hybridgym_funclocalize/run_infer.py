@@ -171,7 +171,7 @@ class FuncLocalizeEvaluation(Evaluation):
     ) -> RemoteWorkspace:
         """Create a generic Docker workspace; clone repo at runtime."""
         agent_server_image = (
-            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-hybridgym-funclocalize"
+            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-python_tag_3.11-bookworm"
         )
 
         if self.metadata.workspace_type == "docker":
