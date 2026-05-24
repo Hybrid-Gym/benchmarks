@@ -102,6 +102,8 @@ result = build_image(
     target='binary',
     push=True,
 )
+print('Status:', result.status)
+print('Bast image:', result.base_image)
 print('Tags:', result.tags)
 "
 ```
