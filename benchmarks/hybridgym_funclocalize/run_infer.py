@@ -171,7 +171,7 @@ class FuncLocalizeEvaluation(Evaluation):
     ) -> RemoteWorkspace:
         """Create a generic Docker workspace; clone repo at runtime."""
         agent_server_image = (
-            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-hybridgym-funclocalize"
+            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-python_tag_3.11-bookworm"
         )
 
         if self.metadata.workspace_type == "docker":
@@ -226,10 +226,18 @@ class FuncLocalizeEvaluation(Evaluation):
                 max_size=self.metadata.condenser_max_size,
                 keep_first=self.metadata.condenser_keep_first,
             )
+        _system_prompt_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "utils",
+            "prompts",
+            "system_prompt_old.j2",
+        )
+        with open(_system_prompt_path) as _f:
+            _system_prompt = _f.read()
         agent = Agent(
             llm=agent_llm,
             tools=tools,
-            system_prompt_kwargs={"cli_mode": True},
+            system_prompt=_system_prompt,
             condenser=condenser,
         )
 
