@@ -89,19 +89,29 @@ uv run hybridgym-funclocalize-infer .llm_config/config.json \
 If the image is not yet available in the default registry, you can build and push to your own:
 
 ```bash
-docker login ghcr.io -u <GITHUB_USERNAME> --password-stdin <<< "<GITHUB_PAT>"
-
-export OPENHANDS_EVAL_AGENT_SERVER_IMAGE="ghcr.io/<GITHUB_USERNAME>/eval-agent-server"
-
 uv run python -c "
+import os
 from benchmarks.utils.build_utils import build_image
+from benchmarks.utils.version import get_sdk_sha
+
+EVAL_AGENT_SERVER_IMAGE = os.getenv(
+    'OPENHANDS_EVAL_AGENT_SERVER_IMAGE', 'ghcr.io/openhands/eval-agent-server'
+)
+SDK_SHA = get_sdk_sha()
+SDK_SHORT_SHA = SDK_SHA[:7]
+IMAGE_TAG_PREFIX = (
+    os.getenv('IMAGE_TAG_PREFIX') or SDK_SHORT_SHA
+)
+
 result = build_image(
     base_image='python:3.11-bookworm',
-    target_image='${OPENHANDS_EVAL_AGENT_SERVER_IMAGE}',
-    custom_tag='hybridgym-funclocalize',
+    target_image=EVAL_AGENT_SERVER_IMAGE,
+    custom_tag=f'{IMAGE_TAG_PREFIX}-hybridgym-funclocalize',
     target='binary',
     push=True,
 )
+print('Status:', result.status)
+print('Bast image:', result.base_image)
 print('Tags:', result.tags)
 "
 ```
