@@ -470,9 +470,12 @@ class Evaluation(ABC, BaseModel):
         completed_in_attempt = get_completed_instances(attempt_file)
 
         if attempt == 1:
-            # Attempt 1: Process everything not yet completed in attempt 1
+            # Attempt 1: Process everything not yet successfully completed.
+            # Use output.jsonl (error-free results) as the source of truth so
+            # that instances which ran but errored are retried rather than skipped.
+            successfully_completed = self._get_completed_instances()
             return [
-                inst for inst in all_instances if inst.id not in completed_in_attempt
+                inst for inst in all_instances if inst.id not in successfully_completed
             ]
         else:
             # Attempt N: Retry what failed OR was missing in N-1,
