@@ -20,7 +20,6 @@ from benchmarks.utils.acp import (
     setup_acp_workspace,
     workspace_keepalive,
 )
-from benchmarks.utils.agent_context import create_agent_context
 from benchmarks.utils.args_parser import add_prompt_path_argument, get_parser
 from benchmarks.utils.build_utils import ensure_local_image
 from benchmarks.utils.console_logging import summarize_instance
@@ -310,16 +309,19 @@ class SWEBenchEvaluation(Evaluation):
                     keep_first=self.metadata.condenser_keep_first,
                 )
             # Load public skills (respects EXTENSIONS_REF env var)
-            agent_context = create_agent_context()
-
+            _system_prompt_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "utils",
+                "prompts",
+                "system_prompt_old.j2",
+            )
+            with open(_system_prompt_path) as _f:
+                _system_prompt = _f.read()
             agent = Agent(
                 llm=agent_llm,
                 tools=tools,
-                system_prompt_kwargs={"cli_mode": True},
+                system_prompt=_system_prompt,
                 condenser=condenser,
-                agent_context=agent_context,
-                # TODO: we can enable security analyzer later
-                # security_analyzer=LLMSecurityAnalyzer(),
             )
 
         assert isinstance(workspace, RemoteWorkspace)
