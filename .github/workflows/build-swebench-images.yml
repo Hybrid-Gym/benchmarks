@@ -107,7 +107,7 @@ jobs:
 
     timeout-minutes: 600  # 10h — matches the old orchestrate_eval.py polling bound in the evaluation repo
 
-    runs-on: ubuntu-latest-8core
+    runs-on: ubuntu-latest
 
     # Allow pushing to GHCR and commenting on issues
     permissions:
