@@ -75,6 +75,10 @@ _PATTERNS: list[tuple[re.Pattern[str], FailureCategory]] = [
         re.compile(r"Remote conversation ended with error", re.IGNORECASE),
         FailureCategory.NON_RESOURCE,
     ),
+    (
+        re.compile(r"Remote conversation got stuck", re.IGNORECASE),
+        FailureCategory.NON_RESOURCE,
+    ),
     # ── Non-resource: malformed model output ───────────────────────────
     (
         re.compile(r"malformed function call", re.IGNORECASE),
