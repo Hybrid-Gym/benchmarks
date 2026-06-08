@@ -542,7 +542,6 @@ if __name__ == "__main__":
         default="/data/tir/projects/tir5/users/yiqingxi/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16_sdk_e212d45_maxiter_60/output.jsonl",
     )
     parser.add_argument("--total_num", type=int, default=50)
-    parser.add_argument("--eval_limit", type=int, default=-1)
     parser.add_argument("--split", type=str, default="easy50")
     parser.add_argument("--update_file", action="store_true", default=False)
     args = parser.parse_args()
@@ -553,24 +552,9 @@ if __name__ == "__main__":
             for line in f:
                 SUBSET_IDS.append(line.strip())
 
-    instance_id2golden_patch = {}
-    with open(args.input_file, "r") as f:
-        for line in f:
-            data = json.loads(line)
-            try:
-                instance_id2golden_patch[data["instance_id"]] = data["instance"][
-                    "patch"
-                ]
-            except Exception:
-                continue
-
-    # Fallback: load golden patches from local cache (new format has instance=null)
-    if not instance_id2golden_patch:
-        golden_patch_file = os.path.join(
-            os.path.dirname(__file__), "golden_patches.json"
-        )
-        with open(golden_patch_file, "r") as f:
-            instance_id2golden_patch = json.load(f)
+    golden_patch_file = os.path.join(os.path.dirname(__file__), "golden_patches.json")
+    with open(golden_patch_file, "r") as f:
+        instance_id2golden_patch = json.load(f)
 
     # extract all file paths from the golden patch
     instance_id2file_paths = {}
@@ -589,12 +573,16 @@ if __name__ == "__main__":
                     "resolved"
                 ]
 
-    local_eval_file = os.path.dirname(args.input_file) + "/report.json"
-    if os.path.exists(local_eval_file):
-        with open(local_eval_file, "r") as f:
-            local_eval_data = json.load(f)
-        for instance_id in local_eval_data["resolved_ids"]:
-            id2resolved[instance_id] = True
+    local_eval_files = [
+        os.path.dirname(args.input_file) + "/output.report.json",
+        os.path.dirname(args.input_file) + "/report.jsonl",
+    ]
+    for local_eval_file in local_eval_files:
+        if os.path.exists(local_eval_file):
+            with open(local_eval_file, "r") as f:
+                local_eval_data = json.load(f)
+            for instance_id in local_eval_data["resolved_ids"]:
+                id2resolved[instance_id] = True
 
     # load the file_path from generated patch
     num_lines = 0
@@ -635,8 +623,6 @@ if __name__ == "__main__":
     lines_with_results = []
     with open(args.input_file, "r") as f:
         for line_idx, line in enumerate(f):
-            if args.eval_limit > 0 and line_idx >= args.eval_limit:
-                break
             data = json.loads(line)
             num_lines += 1
             try:
@@ -646,8 +632,8 @@ if __name__ == "__main__":
                     if instance_id not in SUBSET_IDS:
                         continue
             except Exception:
-                # print("Error: git_patch not found in data")
-                # print(data["instance_id"])
+                print("Error: git_patch not found in data")
+                print(data["instance_id"])
                 continue
 
             if len(data["history"]) <= 4:
