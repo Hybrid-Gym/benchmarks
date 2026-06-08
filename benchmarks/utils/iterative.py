@@ -59,6 +59,11 @@ def get_failed_instances(output_file: str, critic: CriticBase) -> Set[EvalInstan
                     data = json.loads(line.strip())
                     output = EvalOutput.model_validate(data)
 
+                    # Agent-fault runs (max iterations / stuck loop) are not
+                    # infra failures – skip them so they are never retried.
+                    if output.agent_fault:
+                        continue
+
                     # Evaluate using the critic
                     if not evaluate_output(critic, output):
                         failed_instances.add(output.instance_id)

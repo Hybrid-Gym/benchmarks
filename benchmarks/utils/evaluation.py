@@ -1150,6 +1150,34 @@ class Evaluation(ABC, BaseModel):
                 runtime_failure_count + (1 if escalate else 0),
             )
 
+            # Agent-fault errors (max iterations, stuck in loop) mean the infra
+            # worked fine but the agent could not complete the task.  Do not retry;
+            # return a non-error output so it is logged to output.jsonl.
+            if failure_category == FailureCategory.AGENT_FAULT:
+                logger.info(
+                    "[worker] Instance %s: agent fault (%s) – marking as completed "
+                    "without retry.",
+                    instance.id,
+                    str(e),
+                )
+                proxy_cost = self._query_proxy_cost(instance.id, virtual_key)
+                test_result: dict[str, Any] = {}
+                if proxy_cost is not None:
+                    test_result["proxy_cost"] = proxy_cost
+                agent_fault_output = EvalOutput(
+                    instance_id=instance.id,
+                    attempt=critic_attempt,
+                    test_result=test_result,
+                    instruction=None,
+                    error=None,
+                    agent_fault=True,
+                    history=[],
+                    instance=_to_serializable(instance.data),
+                )
+                if runtime_runs:
+                    agent_fault_output.runtime_runs = runtime_runs
+                return agent_fault_output, None
+
             if retry_count < max_retries:
                 logger.warning(
                     f"[worker] Instance {instance.id} failed "

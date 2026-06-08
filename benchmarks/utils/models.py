@@ -235,6 +235,13 @@ class EvalOutput(OpenHandsModel):
     history: list[Event] = Field(default_factory=list)
     metrics: Metrics | None = None
     error: str | None = None
+    agent_fault: bool = Field(
+        default=False,
+        description=(
+            "True when the run ended due to agent behaviour (max iterations reached "
+            "or agent stuck in a loop). Infrastructure was healthy; do not retry."
+        ),
+    )
 
     # Optionally save the input test instance
     instance: dict[str, Any] | None = None

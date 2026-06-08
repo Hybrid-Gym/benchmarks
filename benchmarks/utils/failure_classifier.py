@@ -32,6 +32,7 @@ class FailureCategory(enum.Enum):
 
     RESOURCE = "resource"
     NON_RESOURCE = "non_resource"
+    AGENT_FAULT = "agent_fault"
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +78,11 @@ _PATTERNS: list[tuple[re.Pattern[str], FailureCategory]] = [
     ),
     (
         re.compile(r"Remote conversation got stuck", re.IGNORECASE),
-        FailureCategory.NON_RESOURCE,
+        FailureCategory.AGENT_FAULT,
+    ),
+    (
+        re.compile(r"Agent reached maximum iterations limit", re.IGNORECASE),
+        FailureCategory.AGENT_FAULT,
     ),
     # ── Non-resource: malformed model output ───────────────────────────
     (
