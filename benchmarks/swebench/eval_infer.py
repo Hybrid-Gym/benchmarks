@@ -21,7 +21,6 @@ from benchmarks.swebench.config import EVAL_DEFAULTS
 from benchmarks.utils.constants import MODEL_NAME_OR_PATH
 from benchmarks.utils.laminar import LaminarService
 from benchmarks.utils.patch_utils import remove_files_from_patch
-from benchmarks.utils.report_costs import generate_cost_report
 from openhands.sdk import get_logger
 
 
@@ -313,8 +312,8 @@ Examples:
                 str(input_file), str(dest_report_path)
             )
 
-        # Generate cost report as final step
-        generate_cost_report(str(input_file))
+        # # Generate cost report as final step
+        # generate_cost_report(str(input_file))
 
         logger.info("Script completed successfully!")
         # Emit machine-readable report location for callers

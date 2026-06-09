@@ -10,14 +10,14 @@ export RUNTIME_API_KEY=$REMOTE_KEY
 # Optional: Override default runtime API URL
 # export RUNTIME_API_URL="https://runtime.eval.all-hands.dev" 
 
-# uv run swebench-infer .llm_config/${MODEL_NAME}.json \
-#     --dataset princeton-nlp/SWE-bench_Verified \
-#     --select benchmarks/swebench/easy50_instances.txt \
-#     --split test \
-#     --workspace remote \
-#     --num-workers 16 \
-#     --max-iterations 60 \
-#     --output-dir $STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs
+uv run swebench-infer .llm_config/${MODEL_NAME}.json \
+    --dataset princeton-nlp/SWE-bench_Verified \
+    --select benchmarks/swebench/easy50_instances.txt \
+    --split test \
+    --workspace remote \
+    --num-workers 16 \
+    --max-iterations 60 \
+    --output-dir $STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs
 
     # --n-limit 1
 
@@ -37,4 +37,4 @@ ssh $OGMA_USER@$OGMA_HOST "cd /home/${OGMA_USER}/benchmarks && bash benchmarks/s
 
 rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR 
 
-python benchmarks/swebench/extra_eval.py $OUTPUT_DIR/output.jsonl --total_num -1
+python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
