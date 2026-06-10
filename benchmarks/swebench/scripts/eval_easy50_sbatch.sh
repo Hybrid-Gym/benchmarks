@@ -38,6 +38,10 @@ print(response.message.content[0].text)
 " > /dev/null 2>&1
 }
 
+source $HOME_DIR/home_conda_setup.sh
+cd $HOME_DIR/benchmarks
+export PYTHONPATH=`pwd`
+
 if [ -f "$REPORT_FILE" ] && [ $(wc -l < "$REPORT_FILE") -gt 47 ]; then
     echo "Report file exists and has more than 47 lines"
     echo "Skipping evaluation block..."
