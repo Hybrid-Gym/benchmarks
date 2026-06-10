@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 tqdm.pandas()
 
-HG = "/home/gaokaizhang/Hybrid-Gym"
+HG = "vendor/Hybrid-Gym"
 
 
 def _load_fncall_converter():
@@ -102,6 +102,12 @@ def main():
     p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
+    report_file = os.path.join(os.path.dirname(args.src), "output.report.json")
+    if os.path.exists(report_file):
+        resolved_ids = json.load(open(report_file))["resolved_ids"]
+    else:
+        resolved_ids = []
+
     print(f"Reading {args.src} ...")
     rows = []
     with gzip.open(args.src, "rt") as f:
@@ -115,7 +121,9 @@ def main():
             rows.append(
                 {
                     "instance_id": r["instance_id"],
-                    "resolved": True,
+                    "resolved": r["instance_id"] in resolved_ids
+                    if resolved_ids
+                    else True,
                     "messages": msgs,
                     "tools": tools or [],
                     "git_patch": (r.get("test_result") or {}).get("git_patch", ""),
@@ -123,6 +131,7 @@ def main():
             )
     df = pd.DataFrame(rows)
     print(f"Rows loaded: {len(df)}")
+    print(f"Resolved rows: {len(df[df['resolved']])}")
 
     failed = {"count": 0}
     print("Converting multi-tool-call messages to single-tool-call ...")

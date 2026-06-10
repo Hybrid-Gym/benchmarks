@@ -1,3 +1,6 @@
 [submodule "vendor/software-agent-sdk"]
 	path = vendor/software-agent-sdk
 	url = https://github.com/OpenHands/software-agent-sdk.git
+[submodule "vendor/Hybrid-Gym"]
+	path = vendor/Hybrid-Gym
+	url = https://github.com/Hybrid-Gym/Hybrid-Gym.git
