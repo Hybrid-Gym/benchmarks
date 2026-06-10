@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 tqdm.pandas()
 
-HG = "/home/gaokaizhang/Hybrid-Gym"
+HG = "vendor/Hybrid-Gym"
 
 
 def _load_fncall_converter():
@@ -131,6 +131,7 @@ def main():
             )
     df = pd.DataFrame(rows)
     print(f"Rows loaded: {len(df)}")
+    print(f"Resolved rows: {len(df[df['resolved']])}")
 
     failed = {"count": 0}
     print("Converting multi-tool-call messages to single-tool-call ...")
