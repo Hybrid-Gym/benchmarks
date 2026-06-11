@@ -621,9 +621,19 @@ if __name__ == "__main__":
     global_successful_tool_call_counts = defaultdict(int)
 
     lines_with_results = []
+    all_data = []
     with open(args.input_file, "r") as f:
         for line_idx, line in enumerate(f):
             data = json.loads(line)
+            all_data.append(data)
+            
+    # only keep the last instance with the same instance_id
+    instance_id2data = defaultdict(list)
+    for data in all_data:
+        instance_id2data[data["instance_id"]] = data
+    all_data = list(instance_id2data.values())
+    
+    for data in all_data:
             num_lines += 1
             try:
                 instance_id = data["instance_id"]
