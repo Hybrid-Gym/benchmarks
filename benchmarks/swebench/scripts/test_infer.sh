@@ -39,4 +39,4 @@ rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR
 
 python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
 
-uv run python scripts/combine_completions.py $OUTPUT_DIR/output.jsonl
+uv run python benchmarks/utils/post_process_scripts/combine_completions.py $OUTPUT_DIR/output.jsonl
