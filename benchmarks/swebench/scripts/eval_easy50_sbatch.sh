@@ -38,7 +38,7 @@ print(response.message.content[0].text)
 " > /dev/null 2>&1
 }
 
-source $HOME_DIR/home_conda_setup.sh
+source $HOME_DIR/home_conda_setup.sh openhands
 cd $HOME_DIR/benchmarks
 export PYTHONPATH=`pwd`
 

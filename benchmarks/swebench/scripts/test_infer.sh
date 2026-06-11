@@ -37,6 +37,14 @@ ssh $OGMA_USER@$OGMA_HOST "cd /home/${OGMA_USER}/benchmarks && bash benchmarks/s
 
 rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR 
 
+if [ -f "$OUTPUT_DIR/output.report.json" ]; then
+    echo "Report file exists"
+else
+    echo "Report file does not exist. Re-Run the script to generate the report file."
+    ssh $OGMA_USER@$OGMA_HOST "cd /home/${OGMA_USER}/benchmarks && bash benchmarks/swebench/scripts/docker_eval.sh $MODEL_NAME"
+    rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR 
+fi
+
 python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
 
 uv run python benchmarks/utils/post_process_scripts/combine_completions.py $OUTPUT_DIR/output.jsonl
