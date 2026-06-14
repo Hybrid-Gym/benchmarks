@@ -23,7 +23,7 @@ fi
 
 
 API_KEY="api_key"
-PORT=8000
+PORT=2333
 NGROK_API="http://127.0.0.1:4040/api/tunnels"
 NGROK_LOG="${STORAGE_DIR}/tmp/ngrok.log"
 
