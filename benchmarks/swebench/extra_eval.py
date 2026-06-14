@@ -517,7 +517,7 @@ def never_call_tools(history):
 
 def get_avg_word_count(history):
     word_counts = []
-    for i in range(4, len(history)):
+    for i in range(2, len(history)):
         turn = history[i]
         if (
             turn["source"] != "agent"
@@ -672,8 +672,7 @@ if __name__ == "__main__":
             total_no_tool_call_step_num += no_tool_call_step_num
 
             avg_word_count = get_avg_word_count(data["history"])
-            if avg_word_count > 0:
-                avg_word_count_list.append(avg_word_count)
+            avg_word_count_list.append(avg_word_count)
 
             if instance_id in id2resolved:
                 resolved_count += id2resolved[instance_id]
