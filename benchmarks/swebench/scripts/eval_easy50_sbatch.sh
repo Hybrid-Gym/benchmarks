@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --time=8:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:A6000:1
 #SBATCH --job-name=agent
 #SBATCH --partition=debug
 #SBATCH --output=/home/yiqingxi/tmp/eval%A.out
