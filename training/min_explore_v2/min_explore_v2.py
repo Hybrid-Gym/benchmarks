@@ -10,7 +10,7 @@ in the action content itself):
     If no such action exists, skip this step (keep nothing in phase 1).
 
   Phase 2 – [first_locating_action, first_file_edit_action)
-    Only keep the *first* action whose result mentions the target
+    Only keep the *last* action whose result mentions the target
     class/function name.
     If no such action exists, skip this step (keep nothing in phase 2).
 
@@ -23,7 +23,7 @@ Definitions
 - file-editing action   : assistant message calling file_editor with
                           command=str_replace or insert
 - target file           : file edited in the last successful file-editing action
-- locating action       : first action in the exploration range whose own
+- locating action       : last action in the exploration range whose own
                           content contains the basename of the target file
 - target func/class name: first def/class name found in the old_str of the
                           last successful str_replace on the target file
@@ -272,16 +272,26 @@ def min_explore_messages_v2(
 
         if target_func_name:
             # Keep the *first* action whose result contains the target func name
+            matched_p2: tuple[int, int | None] | None = None
             for ai, ri in phase2_pairs:
                 if _result_contains(messages, ri, target_func_name):
+                    matched_p2 = (ai, ri)  # keep updating to get the last one 
+                    
+            if matched_p2 is not None:
+                _add_pair_to_keep(
+                    keep, extra, messages,
+                    matched_p2[0], matched_p2[1],
+                    first_non_tt, first_file_edit,
+                )
+                phase2_matched = True
+            else:
+                # No function name extracted — keep all steps in phase 2
+                for ai, ri in phase2_pairs:
                     _add_pair_to_keep(
                         keep, extra, messages,
                         ai, ri,
                         first_non_tt, first_file_edit,
                     )
-                    phase2_matched = True
-                    break
-        # else: no function name extracted — keep nothing in phase 2
 
     else:
         # No locating action found: apply phase-1 rule to entire exploration range
