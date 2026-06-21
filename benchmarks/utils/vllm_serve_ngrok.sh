@@ -28,6 +28,14 @@ NGROK_API="http://127.0.0.1:4040/api/tunnels"
 NGROK_LOG="${STORAGE_DIR}/tmp/ngrok.log"
 
 stop_existing_endpoint() {
+    # Stop existing ngrok processes.
+    # if pgrep -f "ngrok http $PORT" >/dev/null 2>&1; then
+    #     echo "Killing existing ngrok tunnel for port $PORT"
+    #     pkill -f "ngrok http $PORT" || true
+    # fi
+    echo "Killing existing ngrok tunnel for port $PORT"
+    killall ngrok || true
+
     echo "Stopping existing endpoint on port $PORT, if any..."
 
     # Stop any process currently listening on PORT.
@@ -45,12 +53,6 @@ stop_existing_endpoint() {
             echo "Force killing process(es) on port $PORT: $pids"
             kill -9 $pids 2>/dev/null || true
         fi
-    fi
-
-    # Stop existing ngrok processes.
-    if pgrep -f "ngrok http $PORT" >/dev/null 2>&1; then
-        echo "Killing existing ngrok tunnel for port $PORT"
-        pkill -f "ngrok http $PORT" || true
     fi
 }
 
