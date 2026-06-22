@@ -24,12 +24,48 @@ Definitions
 """
 
 import argparse
+import ast
+import json
 import re
 
 from datasets import Dataset, load_dataset
 
 
 TASK_TRACKER_PATTERN = re.compile(r"<function=task_tracker[\s>]")
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
+
+
 FILE_EDIT_PATTERN = re.compile(
     r"<function=file_editor>\n<parameter=command>(str_replace|create_file|insert)</parameter>"
 )
@@ -357,17 +393,21 @@ def process_datasets(
     total_inserted = 0
     total_steps_before = 0
     total_steps_after = 0
+    task_list_fixed_count = 0
     processed_rows = []
 
     for row in base_ds:
         iid = row.get("instance_id")
-        steps_before = count_steps(row["messages"])
+        base_messages, tl_changed = fix_messages_task_list(row["messages"])
+        if tl_changed:
+            task_list_fixed_count += 1
+        steps_before = count_steps(base_messages)
         total_steps_before += steps_before
 
         if iid not in ref_by_id:
             skipped_no_overlap += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
+            processed_rows.append({**row, "messages": base_messages})
             continue
 
         ref_msgs = ref_by_id[iid]
@@ -376,11 +416,11 @@ def process_datasets(
         if not ref_exploration_pairs:
             # Reference has no exploration actions before editing; keep base as-is
             total_steps_after += steps_before
-            processed_rows.append(row)
+            processed_rows.append({**row, "messages": base_messages})
             continue
 
         new_messages, num_inserted = add_search_messages(
-            row["messages"], ref_exploration_pairs
+            base_messages, ref_exploration_pairs
         )
 
         if num_inserted > 0:
@@ -401,6 +441,7 @@ def process_datasets(
     print(f"  Avg steps (reference dataset):   {avg_ref_steps:.2f}")
     print(f"  Avg steps before adding search:  {avg_steps_before:.2f}")
     print(f"  Avg steps after adding search:   {avg_steps_after:.2f}")
+    print(f"  Task-list JSON fixed:            {task_list_fixed_count} / {len(base_ds)}")
     print(f"  Output repo:                     {hub_repo}")
 
     if dry_run:

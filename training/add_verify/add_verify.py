@@ -25,6 +25,8 @@ Definitions
 """
 
 import argparse
+import ast
+import json
 import re
 
 from datasets import Dataset, load_dataset
@@ -35,6 +37,38 @@ FILE_EDIT_PATTERN = re.compile(
 )
 FILE_PATH_PATTERN = re.compile(r"<parameter=path>(.*?)</parameter>", re.DOTALL)
 WORKSPACE_DIR_PATTERN = re.compile(r"\bdirectory (\S+)")
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 def is_file_editing(msg: dict) -> bool:
@@ -169,11 +203,14 @@ def process_datasets(
     affected = 0
     total_steps_before = 0
     total_steps_after = 0
+    task_list_fixed_count = 0
     processed_rows = []
 
     for row in base_ds:
         iid = row.get("instance_id")
-        base_msgs = row["messages"]
+        base_msgs, tl_changed = fix_messages_task_list(row["messages"])
+        if tl_changed:
+            task_list_fixed_count += 1
         steps_before = count_steps(base_msgs)
         total_steps_before += steps_before
 
@@ -246,6 +283,7 @@ def process_datasets(
     print(f"  Affected (tail replaced):        {affected} / {eligible}")
     print(f"  Avg steps before:                {avg_before:.2f}")
     print(f"  Avg steps after:                 {avg_after:.2f}")
+    print(f"  Task-list JSON fixed:            {task_list_fixed_count} / {len(base_ds)}")
     print(f"  Output repo:                     {hub_repo}")
 
     if dry_run:

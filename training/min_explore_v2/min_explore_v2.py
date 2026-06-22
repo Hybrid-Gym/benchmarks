@@ -30,6 +30,8 @@ Definitions
 """
 
 import argparse
+import ast
+import json
 import os
 import re
 
@@ -53,6 +55,38 @@ FUNC_CLASS_NAME_PATTERN = re.compile(
 )
 EDIT_SUCCESS_PATTERN = re.compile(r"has been edited")
 FUNCTION_CALL_PATTERN = re.compile(r"<function=\w+>.*?</function>", re.DOTALL)
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 def is_task_tracker(msg: dict) -> bool:
@@ -330,14 +364,16 @@ def min_explore_messages_v2(
     return filtered, steps_removed, phase1_matched, phase2_matched
 
 
-def derive_hub_repo(dataset_name: str) -> str:
+def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
     base = dataset_name.split(":")[0]
-    return f"{base}_min_explore_v2"
+    base_size = dataset_name.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"min_explore_v2_{dataset_size}i")
+    else:
+        return base + f"_min_explore_v2_{dataset_size}i"
 
 
 def process_dataset(dataset_name: str, dry_run: bool = False):
-    hub_repo = derive_hub_repo(dataset_name)
-
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
     print(f"Loaded {len(ds)} trajectories")
@@ -349,10 +385,14 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
     total_msgs_after = 0
     phase1_matched_count = 0
     phase2_matched_count = 0
+    task_list_fixed_count = 0
     processed_rows = []
 
     for row in ds:
         messages = row["messages"]
+        messages, tl_changed = fix_messages_task_list(messages)
+        if tl_changed:
+            task_list_fixed_count += 1
 
         # Skip examples with no file-editing action at all
         if not any(is_file_editing(m) for m in messages):
@@ -374,6 +414,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
         processed_rows.append({**row, "messages": result})
 
     kept = len(processed_rows)
+    hub_repo = derive_hub_repo(dataset_name, dataset_size=kept)
     print("\nResults:")
     print(f"  Skipped (no file-edit action):   {skipped_no_edit} / {len(ds)}")
     print(f"  Kept trajectories:               {kept}")
@@ -388,6 +429,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
             f"  Avg steps removed:               {total_steps_removed / affected_trajectories:.2f}"
         )
     print("    (steps between first exploration action and first file edit)")
+    print(f"  Task-list JSON fixed:            {task_list_fixed_count} / {len(ds)}")
     print(f"  Output repo:                     {hub_repo}")
 
     if dry_run:

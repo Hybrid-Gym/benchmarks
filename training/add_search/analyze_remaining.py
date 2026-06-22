@@ -4,6 +4,8 @@ reference dataset that are NOT being added by add_search.py
 (i.e., not keyword searches and not directory listings).
 """
 
+import ast
+import json
 import re
 import sys
 from collections import Counter, defaultdict
@@ -24,6 +26,38 @@ from add_search import (
 
 TERMINAL_PATTERN = re.compile(r"<function=terminal>", re.DOTALL)
 COMMAND_PATTERN = re.compile(r"<parameter=command>(.*?)</parameter>", re.DOTALL)
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 BASE_DATASET = "synthetic-code-training/func_localize_claude45_1457i_min_explore"
 REF_DATASET  = "synthetic-code-training/func_localize_claude45_1457i"
@@ -63,9 +97,12 @@ def main():
     category_counts: Counter = Counter()          # how many actions total
     instance_counts: Counter = Counter()          # how many instances have ≥1 of this category
     examples: defaultdict = defaultdict(list)     # up to 3 example commands per category
+    task_list_fixed_count = 0
 
     for row in ref_ds:
-        messages = row["messages"]
+        messages, tl_changed = fix_messages_task_list(row["messages"])
+        if tl_changed:
+            task_list_fixed_count += 1
 
         first_file_edit = None
         for i, msg in enumerate(messages):
@@ -90,6 +127,7 @@ def main():
             instance_counts[cat] += 1
 
     total = len(ref_ds)
+    print(f"Task-list JSON fixed: {task_list_fixed_count} / {total}\n")
     print(f"{'Category':<35} {'#actions':>8}  {'#instances':>10}  {'% instances':>12}")
     print("-" * 72)
     for cat, cnt in category_counts.most_common():

@@ -22,6 +22,8 @@ Definitions
 """
 
 import argparse
+import ast
+import json
 import re
 
 from datasets import Dataset, load_dataset
@@ -29,6 +31,38 @@ from datasets import Dataset, load_dataset
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 TASK_TRACKER_PATTERN = re.compile(r"<function=task_tracker[\s>]")
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 # ── Message classifiers ───────────────────────────────────────────────────────
@@ -152,10 +186,14 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
     total_tt_pairs_removed = 0
     total_msgs_before = 0
     total_msgs_after = 0
+    task_list_fixed_count = 0
     processed_rows = []
 
     for row in ds:
         messages = row["messages"]
+        messages, tl_changed = fix_messages_task_list(messages)
+        if tl_changed:
+            task_list_fixed_count += 1
         result, stats = no_general_plan_messages(messages)
 
         if result is None:
@@ -182,6 +220,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
         print(f"  Avg messages after:              {total_msgs_after / kept:.2f}")
         print(f"  Total TT pairs removed:          {total_tt_pairs_removed}")
         print(f"  Avg TT pairs removed per traj:   {total_tt_pairs_removed / kept:.2f}")
+    print(f"  Task-list JSON fixed:            {task_list_fixed_count} / {total}")
     print(f"  Output repo:                     {hub_repo}")
 
     if dry_run:

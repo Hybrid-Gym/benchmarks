@@ -13,6 +13,7 @@ Supported message formats:
     assistant content is a JSON object (or contains a "function_calls" key)
 """
 
+import ast
 import re
 import json
 import argparse
@@ -67,6 +68,38 @@ _RESULT_RE = re.compile(
     r"^EXECUTION RESULT of \[(?P<tool>\w+)\]:\n?(?P<output>.*)",
     re.DOTALL | re.MULTILINE,
 )
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 def parse_xml_calls(content: str) -> list[ToolCall]:
@@ -359,14 +392,20 @@ def main():
     n = min(len(ds), args.max_records) if args.max_records else len(ds)
     print(f"Processing {n} records ...")
 
+    task_list_fixed_count = 0
     records: list[TrajectoryRecord] = []
     for i in range(n):
         row = ds[i]
+        fixed_messages, tl_changed = fix_messages_task_list(row.get("messages", []))
+        if tl_changed:
+            task_list_fixed_count += 1
+            row = {**row, "messages": fixed_messages}
         rec = process_trajectory(row)
         records.append(rec)
         if (i + 1) % 100 == 0:
             print(f"  ... {i+1}/{n}")
 
+    print(f"Task-list JSON fixed: {task_list_fixed_count} / {n}")
     print_summary(records)
 
     if not args.summary_only:

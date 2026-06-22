@@ -11,6 +11,7 @@ Usage:
   python judge_localization_strategies.py [--n 100] [--output results.jsonl]
 """
 
+import ast
 import re
 import json
 import random
@@ -126,6 +127,38 @@ _RESULT_RE = re.compile(
     r"^EXECUTION RESULT of \[(?P<tool>\w+)\]:\n?(?P<output>.*)",
     re.DOTALL | re.MULTILINE,
 )
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 def _parse_xml_calls(content: str):
@@ -354,6 +387,7 @@ def main():
     # ── Judge ────────────────────────────────────────────────────────────────
     results = []
     errors = 0
+    task_list_fixed_count = 0
 
     with open(args.output, "w") as out_f:
         for rank, idx in enumerate(indices):
@@ -361,7 +395,10 @@ def main():
             instance_id = row.get("instance_id", f"row_{idx}")
             resolved = bool(row.get("resolved", False))
 
-            traj_text = serialise_trajectory(row["messages"])
+            fixed_messages, tl_changed = fix_messages_task_list(row.get("messages", []))
+            if tl_changed:
+                task_list_fixed_count += 1
+            traj_text = serialise_trajectory(fixed_messages)
             print(f"[{rank+1:3d}/{len(indices)}] {instance_id} ...", end=" ", flush=True)
 
             try:
@@ -399,6 +436,7 @@ def main():
         print(f"{label:<45} {used_count:>6}  {pct:>4.0f}%")
 
     print(f"\nTotal: {len(results)} records, {errors} errors")
+    print(f"Task-list JSON fixed: {task_list_fixed_count} / {len(indices)}")
     print(f"Output: {args.output}")
 
 
