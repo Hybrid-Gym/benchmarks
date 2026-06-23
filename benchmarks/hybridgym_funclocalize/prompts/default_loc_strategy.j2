@@ -1,0 +1,58 @@
+{% if is_multi %}
+I've uploaded a python code repository in the directory {{ workspace_dir_name }}.
+Your goal is to locate the following {{ num_targets }} targets (docstrings removed) and write docstrings for each:
+
+{{ target_list }}
+
+Follow these steps:
+1. EXPLORATION: Search the codebase (file paths not provided) to find where each target is defined.
+2. UNDERSTANDING: Read implementations to fully understand arguments, return values, and side effects.
+3. RECHECK: Verify that the function/class you located actually matches the given description. Compare the implementation behavior with the description to ensure you found the correct target.
+4. GENERATION: Insert a clear, concise Python docstring inside each definition using triple quotes. Cover purpose, parameters, return value(s), and important behaviors or exceptions.
+5. REVIEW: Double-check formatting and accuracy; avoid changing code outside the docstrings unless strictly necessary.
+{% else %}
+I've uploaded a python code repository in the directory {{ workspace_dir_name }}.
+Your goal is to locate the {{ module_type }} described below and write its docstring.
+
+<{{ module_type }}_description>
+{{ description }}
+</{{ module_type }}_description>
+
+Known details:
+- Target type: {{ module_type }}
+- The original docstring was removed; please restore/author it.
+- Note: The target name is not provided. You must identify the correct {{ module_type }} based on the functionality description above.
+
+Follow these steps:
+1. EXPLORATION: Search the codebase (no file path provided) to find where this {{ module_type }} is defined. Use the localization strategy below.
+2. UNDERSTANDING: Read the implementation to fully understand its arguments, return values, and side effects.
+3. RECHECK: Verify that the {{ module_type }} you located actually matches the given description. Compare the implementation behavior with the description to ensure you found the correct target.
+4. GENERATION: Insert a clear, concise Python docstring inside the definition using triple quotes. Cover purpose, parameters, return value(s), and important behaviors or exceptions.
+5. REVIEW: Double-check formatting and accuracy; avoid changing code outside the docstring unless strictly necessary.
+
+<localization_strategy>
+When searching for the target {{ module_type }}, follow these three principles
+(summarized from successful trajectories):
+
+1. BROAD-THEN-NARROW. Start with broad searches across the whole repository
+   using the most distinctive keywords from the description (a verb + noun
+   from the behavior, an unusual identifier, a domain term). Use ripgrep/grep
+   over the full tree before opening any specific file. Then progressively
+   narrow: subdirectory, file, then function/class.
+
+2. MULTI-ROUND REFINEMENT. Treat localization as iterative. After each
+   search, look at the matches as a whole, pick the most promising signal,
+   and run a follow-up search refining on it (different keyword, restricted
+   path, different surrounding pattern). Do not commit to a single candidate
+   on the first search — expect 2-3 rounds of refinement before you have a
+   short list.
+
+3. READ AFTER NARROWING. Do not open and read full file contents until you
+   have narrowed to a small handful (≤3) of plausible candidates. Opening
+   files too early wastes context on irrelevant code. Once you have a short
+   list, then read each candidate's definition and compare against the
+   description to pick the correct one.
+</localization_strategy>
+
+{% endif %}
+Be thorough in your exploration and reasoning. It's fine if your thinking process is lengthy - quality and completeness are more important than brevity.
