@@ -347,10 +347,14 @@ def add_search_messages(
     return new_messages, len([m for m in to_insert if m.get("role") == "assistant"])
 
 
-def derive_hub_repo(base_dataset: str) -> str:
+def derive_hub_repo(base_dataset: str, dataset_size: int) -> str:
     """Derive an output repo name from the base dataset name."""
     base = base_dataset.split(":")[0]
-    return f"{base}_add_search"
+    base_size = base_dataset.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"add_search_{dataset_size}i")
+    else:
+        return base + f"_add_search_{dataset_size}i"
 
 
 def process_datasets(
@@ -359,7 +363,6 @@ def process_datasets(
     output_repo: str | None = None,
     dry_run: bool = False,
 ):
-    hub_repo = output_repo or derive_hub_repo(base_dataset)
 
     print(f"Loading base dataset:      {base_dataset}")
     base_ds = load_dataset(base_dataset, split="train")
@@ -431,6 +434,7 @@ def process_datasets(
         processed_rows.append({**row, "messages": new_messages})
 
     kept = len(processed_rows)
+    hub_repo = output_repo or derive_hub_repo(base_dataset, dataset_size=kept)
     avg_steps_before = total_steps_before / kept if kept > 0 else 0
     avg_steps_after = total_steps_after / kept if kept > 0 else 0
     print("\nResults:")

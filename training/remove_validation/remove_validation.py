@@ -124,14 +124,16 @@ def remove_validation_steps(messages: list[dict]) -> tuple[list[dict], int]:
     return filtered, steps_removed
 
 
-def derive_hub_repo(dataset_name: str) -> str:
+def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
     base = dataset_name.split(":")[0]
-    return f"{base}_remove_validation"
+    base_size = dataset_name.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"remove_validation_{dataset_size}i")
+    else:
+        return base + f"_remove_validation_{dataset_size}i"
 
 
 def process_dataset(dataset_name: str, dry_run: bool = False):
-    hub_repo = derive_hub_repo(dataset_name)
-
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
     print(f"Loaded {len(ds)} trajectories")
@@ -159,6 +161,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
 
         processed_rows.append({**row, "messages": filtered_messages})
 
+    hub_repo = derive_hub_repo(dataset_name, dataset_size=len(processed_rows))
     print("\nResults:")
     print(f"  Skipped (no file edit pattern):  {skipped_no_edit} / {len(ds)}")
     print(

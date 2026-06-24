@@ -112,19 +112,21 @@ def remove_planning_steps(messages: list[dict]) -> tuple[list[dict], int]:
     return filtered, steps_removed
 
 
-def derive_hub_repo(dataset_name: str) -> str:
-    """Derive the output Hub repo ID by appending _move_think to the dataset name."""
+def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
+    """Derive the output Hub repo ID by replacing or appending _move_think."""
     # Strip any split suffix (e.g. ":train") before deriving the repo id
     base = dataset_name.split(":")[0]
-    return f"{base}_move_think"
+    base_size = dataset_name.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"move_think_{dataset_size}i")
+    else:
+        return base + f"_move_think_{dataset_size}i"
 
 
 def process_dataset(
     dataset_name: str,
     dry_run: bool = False,
 ) -> None:
-    hub_repo = derive_hub_repo(dataset_name)
-
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
     print(f"Loaded {len(ds)} trajectories")
@@ -147,6 +149,7 @@ def process_dataset(
 
         processed_rows.append({**row, "messages": filtered_messages})
 
+    hub_repo = derive_hub_repo(dataset_name, dataset_size=len(processed_rows))
     print("\nResults:")
     print(f"  Affected trajectories:   {affected_trajectories} / {len(ds)}")
     print(

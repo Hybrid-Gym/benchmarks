@@ -288,13 +288,16 @@ def min_explore_messages(
     return filtered, steps_removed
 
 
-def derive_hub_repo(dataset_name: str) -> str:
+def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
     base = dataset_name.split(":")[0]
-    return f"{base}_min_explore"
+    base_size = dataset_name.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"min_explore_{dataset_size}i")
+    else:
+        return base + f"_min_explore_{dataset_size}i"
 
 
 def process_dataset(dataset_name: str, dry_run: bool = False):
-    hub_repo = derive_hub_repo(dataset_name)
 
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
@@ -336,6 +339,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
         processed_rows.append({**row, "messages": result})
 
     kept = len(processed_rows)
+    hub_repo = derive_hub_repo(dataset_name, dataset_size=kept)
     print("\nResults:")
     print(f"  Skipped (no file-edit action):   {skipped_no_edit} / {len(ds)}")
     print(f"  Skipped (no search → target):    {skipped_no_search} / {len(ds)}")
