@@ -3,6 +3,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+training/add_plan/cache/
+
 # C extensions
 *.so
 

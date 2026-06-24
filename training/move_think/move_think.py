@@ -10,6 +10,8 @@ For each planning step removed, the immediately following user message
 """
 
 import argparse
+import ast
+import json
 import re
 
 from datasets import Dataset, load_dataset
@@ -17,6 +19,38 @@ from datasets import Dataset, load_dataset
 
 THINK_PATTERN = re.compile(r"<function=think>")
 THINK_CONTENT_PATTERN = re.compile(r"<function=think>(.*?)</function>", re.DOTALL)
+
+_TASK_LIST_PARAM_RE = re.compile(
+    r'(<parameter=task_list>)(.*?)(</parameter>)',
+    re.DOTALL
+)
+
+
+def fix_task_list_json(content: str) -> str:
+    """Convert Python single-quote task_list values to JSON double-quote syntax."""
+    def _replace(m: re.Match) -> str:
+        raw = m.group(2)
+        try:
+            parsed = ast.literal_eval(raw)
+            return m.group(1) + json.dumps(parsed) + m.group(3)
+        except (ValueError, SyntaxError):
+            return m.group(0)
+    return _TASK_LIST_PARAM_RE.sub(_replace, content)
+
+
+def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
+    """Fix task_list JSON syntax in all messages. Returns (fixed_messages, was_changed)."""
+    changed = False
+    result = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str) and "<parameter=task_list>" in content:
+            new_content = fix_task_list_json(content)
+            if new_content != content:
+                changed = True
+                msg = {**msg, "content": new_content}
+        result.append(msg)
+    return result, changed
 
 
 def is_planning_step(message: dict) -> bool:
@@ -78,29 +112,35 @@ def remove_planning_steps(messages: list[dict]) -> tuple[list[dict], int]:
     return filtered, steps_removed
 
 
-def derive_hub_repo(dataset_name: str) -> str:
-    """Derive the output Hub repo ID by appending _move_think to the dataset name."""
+def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
+    """Derive the output Hub repo ID by replacing or appending _move_think."""
     # Strip any split suffix (e.g. ":train") before deriving the repo id
     base = dataset_name.split(":")[0]
-    return f"{base}_move_think"
+    base_size = dataset_name.split("_")[-1]
+    if base_size[-1] == "i" and base_size[0].isdigit():
+        return base.replace(base_size, f"move_think_{dataset_size}i")
+    else:
+        return base + f"_move_think_{dataset_size}i"
 
 
 def process_dataset(
     dataset_name: str,
     dry_run: bool = False,
 ) -> None:
-    hub_repo = derive_hub_repo(dataset_name)
-
     print(f"Loading dataset: {dataset_name}")
     ds = load_dataset(dataset_name, split="train")
     print(f"Loaded {len(ds)} trajectories")
 
     affected_trajectories = 0
     total_steps_removed = 0
+    task_list_fixed_count = 0
     processed_rows = []
 
     for row in ds:
         messages = row["messages"]
+        messages, tl_changed = fix_messages_task_list(messages)
+        if tl_changed:
+            task_list_fixed_count += 1
         filtered_messages, steps_removed = remove_planning_steps(messages)
 
         if steps_removed > 0:
@@ -109,12 +149,14 @@ def process_dataset(
 
         processed_rows.append({**row, "messages": filtered_messages})
 
+    hub_repo = derive_hub_repo(dataset_name, dataset_size=len(processed_rows))
     print("\nResults:")
     print(f"  Affected trajectories:   {affected_trajectories} / {len(ds)}")
     print(
         f"  Total steps removed per trajectory:     {total_steps_removed / affected_trajectories}"
     )
     print("    (includes both planning steps and their execution result feedbacks)")
+    print(f"  Task-list JSON fixed:    {task_list_fixed_count} / {len(ds)}")
     print(f"  Output repo:             {hub_repo}")
 
     if dry_run:

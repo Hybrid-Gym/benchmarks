@@ -20,14 +20,6 @@ if [ ! -d "$CHECKPOINT_DIR" ]; then
   exit 1
 fi
 
-NODE=$(hostname)
-IP=$(grep -w "${NODE}.eth" /etc/hosts | awk '{print $1}' | head -1)
-
-if [ -z "$IP" ]; then
-    echo "Node '$NODE' not found in /etc/hosts"
-    exit 1
-fi
-
 
 CONFIG_ENTRY="
 {

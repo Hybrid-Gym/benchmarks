@@ -25,7 +25,7 @@ def get_sdk_sha() -> str:
 
 
 SDK_SHA = get_sdk_sha()
-SDK_SHORT_SHA = SDK_SHA[:7]
+SDK_SHORT_SHA = os.getenv("SDK_SHORT_SHA") or SDK_SHA[:7]
 
 
 # Centralized image tag prefix used by all benchmark runners.
