@@ -218,14 +218,12 @@ def process_datasets(
         if not row.get("resolved"):
             skipped_base_not_resolved += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
             continue
 
         # Ref must exist and be resolved
         if iid not in ref_by_id:
             skipped_no_ref += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
             continue
 
         ref_msgs = ref_by_id[iid]["messages"]
@@ -238,33 +236,29 @@ def process_datasets(
         if base_file is None:
             skipped_no_base_edit += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
             continue
 
         ref_file = extract_edited_file_rel(ref_msgs, ref_ws or "")
         if ref_file is None:
             skipped_no_ref_edit += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
             continue
 
         # Both must have edited the same relative file path
         if base_file != ref_file:
             skipped_different_file += 1
             total_steps_after += steps_before
-            processed_rows.append(row)
             continue
 
         new_msgs, changed = splice_verify_tail(base_msgs, ref_msgs)
 
         if changed:
             affected += 1
-
-        steps_after = count_steps(new_msgs)
-        total_steps_after += steps_after
-        
-        if changed:
             processed_rows.append({**row, "messages": new_msgs})
+
+            steps_after = count_steps(new_msgs)
+            total_steps_after += steps_after
+            
 
     kept = len(processed_rows)
     eligible = kept - skipped_base_not_resolved - skipped_no_ref - skipped_no_base_edit - skipped_no_ref_edit - skipped_different_file
@@ -310,7 +304,7 @@ def main():
     )
     parser.add_argument(
         "--ref-dataset",
-        required=True,
+        default="synthetic-code-training/func_localize_claude45_1457i",
         help="HuggingFace dataset name for the reference trajectories to pull "
              "the edit+verification+finish tail from "
              "(e.g., synthetic-code-training/func_localize_claude45_1457i)",
