@@ -1,0 +1,87 @@
+{% if is_multi %}
+I've uploaded a python code repository in the directory {{ workspace_dir_name }}.
+Your goal is to locate the following {{ num_targets }} targets (docstrings removed) and write docstrings for each:
+
+{{ target_list }}
+
+Follow these steps exactly. Do not skip or reorder.
+
+1. EXPLORATION (Localization strategy — strict):
+- Start with broad, repo-wide searches BEFORE opening any file. Run 1–2 repo-wide search commands that cover the whole tree (examples: ripgrep "pattern" ., grep -R --line-number "pattern" ., find . -name "*.py"). Do not open any file before these broad searches complete.
+- Record results from these broad searches as an initial candidate set (file paths, matching lines, suspected symbol names).
+- Perform at least one additional DISTINCT search that refines the candidate set (≥2 total search rounds). Each refinement must change something: different keywords, regex patterns, restrict to a subdirectory, restrict to file name patterns, search for usages/imports, or search for signatures. Document the command and how it narrows candidates.
+- Repeat refinement searches as needed until you have ≤3 candidate locations for each target. Each refinement must be informed by prior results (explain what you learned and how the next search used that information).
+- Do NOT perform full-file reads until the candidate set for that target is ≤3 files/functions. Before narrowing to ≤3, you may open small file snippets only (file_editor with a small view_range, e.g., <=50 lines) to inspect the matching lines. Full file views (file_editor with no view_range or with >100 lines) are allowed only after candidate set ≤3.
+- For multi-target tasks, you may run combined searches but ensure you perform the ≥2-round refine process for each target and list the commands/results per target.
+- In your reasoning log, list each search command you ran (exact command or pattern), the resulting candidate files/locations, and the refinement rationale that reduced the candidate set.
+
+2. UNDERSTANDING:
+- Now that candidates are narrowed to ≤3, open the candidate file(s) with full reads to fully understand the implementation(s).
+- For each located target, inspect arguments, return values, side effects, exceptions, and any related helper functions or class attributes.
+- Take notes of parameter names, types (where inferable), important behaviors, and edge cases.
+
+3. RECHECK:
+- Verify the implementation matches the given description. Compare behavior and signatures to the description and confirm you have the correct function/class.
+- If the match is uncertain, return to EXPLORATION and perform another refinement round (add a distinct search). Do not finalize until confident.
+
+4. GENERATION:
+- Insert a clear, concise Python docstring (triple-quoted) into each identified definition. Include: short purpose summary, parameters (names/types/meaning), return value(s) and types, important behaviors, side effects, exceptions raised, and any usage notes or examples if helpful.
+- Keep docstrings accurate to the implementation; do not change logic. If you discover minor issues that must be fixed to make a docstring correct (e.g., obvious typing comment), mention them in your log and prefer minimal code edits.
+
+5. REVIEW:
+- Double-check formatting, punctuation, and accuracy. Ensure you did not modify code outside the docstrings unless strictly necessary (and document any such change).
+- Confirm you followed the localization strategy: (a) initial repo-wide searches before any file opens, (b) ≥2 distinct search rounds that refine candidates, and (c) full-file reads only after candidate set ≤3.
+
+When you submit results, include:
+- The list of search commands used and short results for each (as executed in EXPLORATION).
+- The final chosen file(s)/location(s) for each target and a brief justification.
+- The inserted docstrings (or a diff/patch showing the insertion).
+
+Be thorough and explicit about your search commands and refinement reasoning.
+{% else %}
+I've uploaded a python code repository in the directory {{ workspace_dir_name }}.
+Your goal is to locate the {{ module_type }} described below and write its docstring.
+
+<{{ module_type }}_description>
+{{ description }}
+</{{ module_type }}_description>
+
+Known details:
+- Target type: {{ module_type }}
+- The original docstring was removed; please restore/author it.
+- Note: The target name is not provided. You must identify the correct {{ module_type }} based on the functionality description above.
+
+Follow these steps exactly. Do not skip or reorder.
+
+1. EXPLORATION (Localization strategy — strict):
+- Start with broad, repo-wide searches BEFORE opening any file. Run 1–2 repo-wide search commands that cover the whole tree (examples: ripgrep "pattern" ., grep -R --line-number "pattern" ., find . -name "*.py"). Do not open any file before these broad searches complete.
+- Record results from these broad searches as an initial candidate set (file paths, matching lines, suspected symbol names).
+- Perform at least one additional DISTINCT search that refines the candidate set (≥2 total search rounds). Each refinement must change something: different keywords, regex patterns, restrict to a subdirectory, restrict to file name patterns, search for usages/imports, or search for signatures. Document the command and how it narrows candidates.
+- Repeat refinement searches as needed until you have ≤3 candidate locations. Each refinement must be informed by prior results (explain what you learned and how the next search used that information).
+- Do NOT perform full-file reads until the candidate set is ≤3 files/functions. Before narrowing to ≤3, you may open small file snippets only (file_editor with a small view_range, e.g., <=50 lines) to inspect the matching lines. Full file views (file_editor with no view_range or with >100 lines) are allowed only after candidate set ≤3.
+- In your reasoning log, list each search command you ran (exact command or pattern), the resulting candidate files/locations, and the refinement rationale that reduced the candidate set.
+
+2. UNDERSTANDING:
+- Now that candidates are narrowed to ≤3, open the candidate file(s) with full reads to fully understand the implementation(s).
+- Inspect arguments, return values, side effects, exceptions, and any related helper functions or class attributes.
+- Take notes of parameter names, types (where inferable), important behaviors, and edge cases.
+
+3. RECHECK:
+- Verify the implementation matches the given description. Compare behavior and signatures to the description and confirm you have the correct {{ module_type }}.
+- If the match is uncertain, return to EXPLORATION and perform another refinement round (add a distinct search). Do not finalize until confident.
+
+4. GENERATION:
+- Insert a clear, concise Python docstring (triple-quoted) into the identified definition. Include: short purpose summary, parameters (names/types/meaning), return value(s) and types, important behaviors, side effects, exceptions raised, and any usage notes or examples if helpful.
+- Keep docstrings accurate to the implementation; do not change logic. If you discover minor issues that must be fixed to make a docstring correct (e.g., obvious typing comment), mention them in your log and prefer minimal code edits.
+
+5. REVIEW:
+- Double-check formatting, punctuation, and accuracy. Ensure you did not modify code outside the docstring unless strictly necessary (and document any such change).
+- Confirm you followed the localization strategy: (a) initial repo-wide searches before any file opens, (b) ≥2 distinct search rounds that refine candidates, and (c) full-file reads only after candidate set ≤3.
+
+When you submit results, include:
+- The list of search commands used and short results for each (as executed in EXPLORATION).
+- The final chosen file/location and a brief justification.
+- The inserted docstring (or a diff/patch showing the insertion).
+
+Be thorough and explicit about your search commands and refinement reasoning.
+{% endif %}

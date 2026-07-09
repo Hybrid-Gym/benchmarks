@@ -316,7 +316,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get("JUDGE_MODEL", "openai/openai/gpt-5-mini"),
     )
-    p.add_argument("--api-key", default=os.environ.get("LLM_API_KEY"))
+    p.add_argument("--api-key", default=os.environ.get("NVIDIA_API_KEY"))
     p.add_argument(
         "--base-url",
         default=os.environ.get("LLM_BASE_URL", "https://inference-api.nvidia.com/v1"),
@@ -332,7 +332,7 @@ def main() -> None:
     args = _build_parser().parse_args()
 
     if not args.api_key:
-        sys.exit("error: --api-key required (or set LLM_API_KEY)")
+        sys.exit("error: --api-key required (or set NVIDIA_API_KEY)")
     if len(args.src) == 1 and not args.out:
         sys.exit("error: --out required when a single --src is given")
     if len(args.src) > 1 and not args.out_dir:

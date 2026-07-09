@@ -33,17 +33,23 @@ rclone copy $OUTPUT_DIR/output.jsonl ogma:$OGMA_OUTPUT_DIR
 OGMA_USER="yiqingxi"
 OGMA_HOST="ogma.lti.cs.cmu.edu"
 
-ssh $OGMA_USER@$OGMA_HOST "cd /home/${OGMA_USER}/benchmarks && bash benchmarks/swebench/scripts/docker_eval.sh $MODEL_NAME"
-
-rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR 
-
-if [ -f "$OUTPUT_DIR/output.report.json" ]; then
-    echo "Report file exists"
-else
-    echo "Report file does not exist. Re-Run the script to generate the report file."
+MAX_ATTEMPTS=3
+for attempt in $(seq 1 $MAX_ATTEMPTS); do
+    echo "Running docker eval (attempt $attempt/$MAX_ATTEMPTS)..."
     ssh $OGMA_USER@$OGMA_HOST "cd /home/${OGMA_USER}/benchmarks && bash benchmarks/swebench/scripts/docker_eval.sh $MODEL_NAME"
-    rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR 
-fi
+    rclone copy ogma:$OGMA_OUTPUT_DIR/output.report.json $OUTPUT_DIR
+
+    if [ -f "$OUTPUT_DIR/output.report.json" ]; then
+        echo "Report file exists"
+        break
+    fi
+
+    if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+        echo "Report file does not exist. Retrying..."
+    else
+        echo "Report file does not exist after $MAX_ATTEMPTS attempts."
+    fi
+done
 
 python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
 

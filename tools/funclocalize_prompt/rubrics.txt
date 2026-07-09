@@ -1,0 +1,17 @@
+1. BROAD-THEN-NARROW
+   Compliant if the agent's first 1-2 search/grep actions cover the WHOLE repository
+   (e.g. ripgrep over the tree, find . -name, grep -r), BEFORE opening any specific file,
+   AND later actions narrow (subdirectory or specific file).
+   Non-compliant if the agent opens a specific file before any broad search, or never narrows.
+
+2. MULTI-ROUND REFINEMENT
+   Compliant if the agent runs >=2 distinct search commands where later ones clearly refine
+   earlier ones (different keywords / restricted path / different pattern) based on what it
+   learned from prior results.
+   Non-compliant if the agent commits to a single candidate after just one search.
+
+3. READ AFTER NARROWING
+   Compliant if "full" file reads (file_editor view with no view_range OR with a large range
+   like more than ~100 lines) happen ONLY after the candidate set has been narrowed to <=3
+   files/functions.
+   Non-compliant if the agent reads full files early, before narrowing.

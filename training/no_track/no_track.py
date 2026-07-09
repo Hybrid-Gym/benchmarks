@@ -1,24 +1,19 @@
 """
-Remove task-tracker actions and their results that appear before the first
-non-task-tracker action.
+Remove ALL task-tracker actions and their results from trajectories.
 
-All task-tracker action+result pairs that occur before the first
-non-task-tracker assistant action are stripped.  Everything from the first
-non-task-tracker action onward is left untouched.
-
-The resulting trajectory therefore contains:
+Every task_tracker action+result pair is stripped regardless of where it
+appears in the trajectory.  The resulting trajectory therefore contains:
 
   [system / user preamble]
-  <everything from the first non-task-tracker action onward, unchanged>
+  <all non-task-tracker action+result pairs, in original order>
 
-An example is skipped entirely if there is no non-task-tracker assistant
-action in the trajectory.
+An example is skipped entirely if there are no non-task-tracker assistant
+actions remaining after removal.
 
 Definitions
 -----------
 - task-tracker action : assistant message calling <function=task_tracker>
-- non-task-tracker action : any assistant message that does NOT call
-                            task_tracker
+- non-task-tracker action : any assistant message that does NOT call task_tracker
 """
 
 import argparse
@@ -114,15 +109,15 @@ def build_action_result_pairs(messages: list[dict]) -> list[tuple[int, int | Non
 
 # ── Main processing ───────────────────────────────────────────────────────────
 
-def no_general_plan_messages(
+def no_track_messages(
     messages: list[dict],
 ) -> tuple[list[dict] | None, dict]:
     """
-    Remove task-tracker action+result pairs before the first non-task-tracker
-    action.
+    Remove ALL task-tracker action+result pairs from the trajectory.
 
     Returns (filtered_messages, stats_dict).
-    Returns (None, stats_dict) when the example should be skipped.
+    Returns (None, stats_dict) when the example should be skipped (no
+    non-task-tracker actions remain).
     """
     stats = {
         "skipped_no_non_tt_action": False,
@@ -131,7 +126,7 @@ def no_general_plan_messages(
 
     all_pairs = build_action_result_pairs(messages)
 
-    # Collect indices of task-tracker actions and their results
+    # Collect indices of ALL task-tracker actions and their results
     tt_indices: set[int] = set()
     for ai, ri in all_pairs:
         if is_task_tracker(messages[ai]):
@@ -139,32 +134,20 @@ def no_general_plan_messages(
             if ri is not None:
                 tt_indices.add(ri)
 
-    # Find the index of the first non-task-tracker assistant action
-    first_non_tt: int | None = None
-    for i, msg in enumerate(messages):
-        if msg.get("role") == "assistant" and i not in tt_indices:
-            first_non_tt = i
-            break
-
-    if first_non_tt is None:
+    # Check that at least one non-task-tracker assistant action remains
+    has_non_tt = any(
+        msg.get("role") == "assistant" and i not in tt_indices
+        for i, msg in enumerate(messages)
+    )
+    if not has_non_tt:
         stats["skipped_no_non_tt_action"] = True
         return None, stats
 
-    # Count how many TT pairs appear before first_non_tt
-    tt_pairs_removed = sum(
-        1
-        for ai, ri in all_pairs
-        if is_task_tracker(messages[ai]) and ai < first_non_tt
+    stats["tt_pairs_removed"] = sum(
+        1 for ai, _ in all_pairs if is_task_tracker(messages[ai])
     )
-    stats["tt_pairs_removed"] = tt_pairs_removed
 
-    # Preamble: all non-assistant messages before first_non_tt
-    preamble = [msg for msg in messages[:first_non_tt] if msg.get("role") != "assistant"]
-
-    # Keep everything from first_non_tt onward unchanged
-    tail = messages[first_non_tt:]
-
-    filtered = preamble + tail
+    filtered = [msg for i, msg in enumerate(messages) if i not in tt_indices]
     return filtered, stats
 
 
@@ -174,9 +157,9 @@ def derive_hub_repo(dataset_name: str, dataset_size: int) -> str:
     base = dataset_name.split(":")[0]
     base_size = dataset_name.split("_")[-1]
     if base_size[-1] == "i" and base_size[0].isdigit():
-        return base.replace(base_size, f"no_general_plan_{dataset_size}i")
+        return base.replace(base_size, f"no_track_{dataset_size}i")
     else:
-        return base + f"_no_general_plan_{dataset_size}i"
+        return base + f"_no_track_{dataset_size}i"
 
 
 def process_dataset(dataset_name: str, dry_run: bool = False):
@@ -196,7 +179,7 @@ def process_dataset(dataset_name: str, dry_run: bool = False):
         messages, tl_changed = fix_messages_task_list(messages)
         if tl_changed:
             task_list_fixed_count += 1
-        result, stats = no_general_plan_messages(messages)
+        result, stats = no_track_messages(messages)
 
         if result is None:
             if stats["skipped_no_non_tt_action"]:
@@ -242,8 +225,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
-        default="synthetic-code-training/func_localize_claude45_1457i",
-        help="HuggingFace dataset name (output repo will be {dataset}_no_general_plan)",
+        default="synthetic-code-training/func_localize_gpt55_1477i",
+        help="HuggingFace dataset name (output repo will replace size suffix with no_track_{size}i)",
     )
     parser.add_argument(
         "--dry-run",

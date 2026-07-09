@@ -40,7 +40,7 @@ from openhands.sdk.context.condenser import LLMSummarizingCondenser
 from openhands.sdk.workspace import RemoteWorkspace
 from openhands.tools.delegate import DelegateTool
 from openhands.tools.preset.default import get_default_tools
-from openhands.workspace import APIRemoteWorkspace
+from openhands.workspace import APIRemoteWorkspace, ApptainerWorkspace
 
 
 logger = get_logger(__name__)
@@ -170,8 +170,10 @@ class FuncLocalizeEvaluation(Evaluation):
         forward_env: list[str] | None = None,
     ) -> RemoteWorkspace:
         """Create a generic Docker workspace; clone repo at runtime."""
-        agent_server_image = (
-            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-python_tag_3.11-bookworm"
+        # Allow full image override via env var (e.g. when the default tag is broken)
+        agent_server_image = os.getenv(
+            "FULL_EVAL_AGENT_SERVER_IMAGE",
+            f"{EVAL_AGENT_SERVER_IMAGE}:{IMAGE_TAG_PREFIX}-python_tag_3.11-bookworm",
         )
 
         if self.metadata.workspace_type == "docker":
@@ -203,6 +205,17 @@ class FuncLocalizeEvaluation(Evaluation):
                 forward_env=forward_env or [],
                 init_timeout=startup_timeout,
                 startup_wait_timeout=startup_timeout,
+            )
+        elif self.metadata.workspace_type == "apptainer":
+            if not remote_image_exists(agent_server_image):
+                raise RuntimeError(
+                    f"Agent server image {agent_server_image} does not exist in container registry."
+                )
+            workspace = ApptainerWorkspace(
+                server_image=agent_server_image,
+                working_dir="/workspace",
+                forward_env=forward_env or [],
+                cache_dir=os.getenv("APPTAINER_CACHEDIR", None),
             )
         else:
             raise ValueError(
@@ -248,16 +261,32 @@ class FuncLocalizeEvaluation(Evaluation):
         instance.data["_workspace_dir_name"] = workspace_dir_name
         repo_path = f"/workspace/{workspace_dir_name}"
 
-        # Clone repository
-        res = workspace.execute_command(
-            f"git clone https://github.com/{instance.data['repo']}.git {repo_path}"
-        )
-        if res.exit_code != 0:
-            raise RuntimeError(f"Failed to clone repo: {res.stderr}")
+        # Preserve the original base_commit from the dataset so retry attempts
+        # don't accidentally use the re-init commit hash from a previous attempt.
+        original_base_commit = instance.data.get("_original_base_commit") or instance.data["base_commit"]
+        instance.data["_original_base_commit"] = original_base_commit
 
-        # Checkout base commit
+        # Clone repository with an extended timeout (execute_command default is 30s
+        # which is too short for large repos; pass timeout=600 explicitly).
+        # Use blobless clone (--filter=blob:none) to fetch all commit history
+        # without downloading file contents upfront — this is fast for any base_commit
+        # age and avoids the depth-too-shallow problem with large repos like PaddleOCR.
+        # File blobs are fetched on-demand when git checkout runs.
+        repo_url = f"https://github.com/{instance.data['repo']}.git"
+        logger.info("Cloning %s → %s (blobless)", repo_url, repo_path)
+        clone_res = workspace.execute_command(
+            f"git clone --filter=blob:none {repo_url} {repo_path}",
+            timeout=600.0,
+        )
+        if clone_res.exit_code != 0:
+            raise RuntimeError(f"Failed to clone repo: {clone_res.stderr or clone_res.stdout}")
+
+        # Checkout base commit (use original dataset value, not a re-init hash from a prior attempt).
+        # Blobless clones download blobs on-demand during checkout, which can be slow for large
+        # repos — pass an explicit timeout to avoid the 30s default.
         res = workspace.execute_command(
-            f"cd {repo_path} && git checkout {instance.data['base_commit']} && git reset --hard"
+            f"cd {repo_path} && git checkout {original_base_commit} && git reset --hard",
+            timeout=600.0,
         )
         if res.exit_code != 0:
             raise RuntimeError(f"Failed to checkout base commit: {res.stderr}")

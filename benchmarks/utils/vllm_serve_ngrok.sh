@@ -132,7 +132,8 @@ write_config() {
   "api_key": "$API_KEY",
   "base_url": "$base_url",
   "temperature": 0.0,
-  "native_tool_calling": false
+  "native_tool_calling": false,
+  "litellm_extra_body": {"enable_thinking": false}
 }
 EOF
 }
