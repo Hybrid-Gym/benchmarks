@@ -1,0 +1,7 @@
+{
+  "broad_then_narrow": 1.0,
+  "multi_round_refinement": 1.0,
+  "read_after_narrowing": 0.8979591836734694,
+  "total": 49,
+  "errors": 0
+}

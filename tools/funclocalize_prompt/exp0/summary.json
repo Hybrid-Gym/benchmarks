@@ -1,0 +1,82 @@
+{
+  "exp_id": "exp0",
+  "baseline_scores": {
+    "broad_then_narrow": 0.02,
+    "multi_round_refinement": 0.6,
+    "read_after_narrowing": 0.04,
+    "total": 50,
+    "errors": 0
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "prompt_path": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_1/prompt.j2",
+      "rollout_dir": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_1/rollout",
+      "output_jsonl": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_1/rollout/hybrid-gym__hybrid_gym_func_localize-train/openai/openai/openai/gpt-5-mini_sdk_3a0fce0_maxiter_30_N_prompt_opt_exp0_iter1/output.jsonl",
+      "rollout_cost": {
+        "count": 39,
+        "total_cost_usd": 0.869245,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0
+      },
+      "scores": {
+        "broad_then_narrow": 0.058823529411764705,
+        "multi_round_refinement": 0.8529411764705882,
+        "read_after_narrowing": 0.17647058823529413,
+        "total": 34,
+        "errors": 0
+      },
+      "converged": false,
+      "convergence_reason": "broad_then_narrow: 5.9% (still below thresholds); multi_round_refinement: 85.3% (error rate halved from 40.0%); read_after_narrowing: 17.6% (still below thresholds)"
+    },
+    {
+      "iteration": 2,
+      "prompt_path": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_2/prompt.j2",
+      "rollout_dir": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_2/rollout",
+      "output_jsonl": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_2/rollout/hybrid-gym__hybrid_gym_func_localize-train/openai/openai/openai/gpt-5-mini_sdk_3a0fce0_maxiter_30_N_prompt_opt_exp0_iter2/output.jsonl",
+      "rollout_cost": {
+        "count": 34,
+        "total_cost_usd": 0.719748,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0
+      },
+      "scores": {
+        "broad_then_narrow": 0.11764705882352941,
+        "multi_round_refinement": 0.6470588235294118,
+        "read_after_narrowing": 0.29411764705882354,
+        "total": 34,
+        "errors": 0
+      },
+      "converged": false,
+      "convergence_reason": "broad_then_narrow: 11.8% (still below thresholds); multi_round_refinement: 64.7% (still below thresholds); read_after_narrowing: 29.4% (improved by 20% from 4.0%)"
+    },
+    {
+      "iteration": 3,
+      "prompt_path": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_3/prompt.j2",
+      "rollout_dir": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_3/rollout",
+      "output_jsonl": "/home/yiqingxi/benchmarks/tools/funclocalize_prompt/exp0/iter_3/rollout/hybrid-gym__hybrid_gym_func_localize-train/openai/openai/openai/gpt-5-mini_sdk_3a0fce0_maxiter_30_N_prompt_opt_exp0_iter3/output.jsonl",
+      "rollout_cost": {
+        "count": 49,
+        "total_cost_usd": 2.496305,
+        "total_prompt_tokens": 0,
+        "total_completion_tokens": 0
+      },
+      "scores": {
+        "broad_then_narrow": 1.0,
+        "multi_round_refinement": 1.0,
+        "read_after_narrowing": 0.8979591836734694,
+        "total": 49,
+        "errors": 0
+      },
+      "converged": true,
+      "convergence_reason": "broad_then_narrow: 100.0% (>90%); multi_round_refinement: 100.0% (>90%); read_after_narrowing: 89.8% (error rate halved from 96.0%)"
+    }
+  ],
+  "final_scores": {
+    "broad_then_narrow": 1.0,
+    "multi_round_refinement": 1.0,
+    "read_after_narrowing": 0.8979591836734694,
+    "total": 49,
+    "errors": 0
+  }
+}

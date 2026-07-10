@@ -1,0 +1,122 @@
+{% if is_multi %}
+I've uploaded a Python repository at /workspace/{{ workspace_dir_name }}.
+Your goal: locate the following {{ num_targets }} targets (docstrings removed) and write a clear, accurate docstring for each:
+
+{{ target_list }}
+
+Workflow (strict; follow exactly):
+
+1) OVERVIEW (MANDATORY BROAD SEARCH FIRST)
+   - BEFORE opening any specific file, run 1–2 broad searches that scan the ENTIRE repository root /workspace/{{ workspace_dir_name }} for the most distinctive keywords from each target's description.
+   - Acceptable commands (examples you should use exactly or adapt):
+     - rg -n --hidden --glob '!venv' "keyword1|keyword2" /workspace/{{ workspace_dir_name }}
+     - grep -RInE "keyword1|keyword2" /workspace/{{ workspace_dir_name }}
+     - find /workspace/{{ workspace_dir_name }} -name "*.py" -print
+   - These broad searches must cover the whole repo tree. Do NOT open any full file contents before these broad searches complete.
+
+2) MULTI-ROUND REFINEMENT (AT LEAST 2 DISTINCT SEARCH ROUNDS)
+   - After reviewing broad search results, run at least TWO different, narrower searches that refine candidates based on signals you saw.
+   - Refinement examples:
+     - Restrict to a subdirectory: rg -n "keyword" /workspace/{{ workspace_dir_name }}/subpkg
+     - Search for definition lines or identifiers: rg -n "^def .*target_name|^class .*TargetName" /workspace/{{ workspace_dir_name }}
+     - Search for surrounding terms seen in matches: rg -n "helper_function|specific_constant" /workspace/{{ workspace_dir_name }}
+   - Each refinement must be motivated by the previous results (state briefly what you learned and why you ran the next search).
+
+3) CANDIDATE MANAGEMENT (REPORT BEFORE READING)
+   - After refinement, produce a short candidate list (paths + brief note why each is plausible). The candidate list must be <= 10 before any file reads.
+   - Only when candidates are narrowed to <= 3 should you open full file contents for deep reading.
+
+4) READ AFTER NARROWING (STRICT LIMITS)
+   - Do NOT open full files early. Allowed lightweight inspection before narrowing:
+     - Show filename matches, surrounding match lines, or small context snippets (rg already provides line-level context).
+     - Use head/tail or sed to view ≤30 lines if necessary for quick disambiguation.
+   - Full file reads (file_editor view with no view_range OR range >100 lines) are permitted ONLY after you have ≤ 3 plausible candidates and have listed them explicitly.
+   - When you do read files fully, state the candidate count and which files you are opening.
+
+5) VERIFY & WRITE DOCSTRINGS
+   - Confirm the located definition matches the provided description by comparing behavior, parameters, return values, and side effects.
+   - Insert a triple-quoted Python docstring in the definition covering:
+     - One-line summary (50–80 chars).
+     - Explanation of parameters, types, defaults, and behavior.
+     - Return value(s) and types.
+     - Important side effects, exceptions raised, and thread-safety/IO notes if relevant.
+   - Do not modify code outside the docstring unless absolutely necessary; if you must change code, state why.
+
+6) LOGGING & EXPLANATIONS (REQUIRED)
+   - For each search step you run, log the exact command you ran and a 1–2 line rationale for it.
+   - After refinement rounds, list the candidate files with short justifications.
+   - Before any full-file read, confirm: "Opening full file(s): <paths>" and explain why they are ≤3 and likely correct.
+
+Forbidden behaviors (will be judged non-compliant):
+- Opening a specific file (full read) before running repo-wide broad searches.
+- Reading full files early (before narrowing to ≤3).
+- Committing to a single candidate after only one search round.
+
+Be thorough and explicit in your search log and reasoning as you proceed. Follow the broad-then-narrow, multi-round refinement, and read-after-narrowing rules exactly.
+{% else %}
+I've uploaded a Python repository at /workspace/{{ workspace_dir_name }}.
+Your goal: locate the {{ module_type }} described below (its docstring was removed) and write a clear, accurate docstring.
+
+<{{ module_type }}_description>
+{{ description }}
+</{{ module_type }}_description>
+
+Known details:
+- Target type: {{ module_type }}
+- The target's name is not provided. Identify the correct {{ module_type }} by behavior.
+
+Workflow (strict; follow exactly):
+
+1) OVERVIEW (MANDATORY BROAD SEARCH FIRST)
+   - BEFORE opening any specific file, run 1–2 broad searches that scan the ENTIRE repository root /workspace/{{ workspace_dir_name }} for the most distinctive keywords extracted from the description (verb+noun, unusual identifier, domain term).
+   - Example commands you should use (choose appropriate keywords):
+     - rg -n --hidden --glob '!venv' "keywordA|keywordB" /workspace/{{ workspace_dir_name }}
+     - grep -RInE "keywordA|keywordB" /workspace/{{ workspace_dir_name }}
+     - find /workspace/{{ workspace_dir_name }} -name "*.py" -print
+   - These broad searches must cover the whole repo. Do NOT open full file contents before these broad searches complete.
+
+2) MULTI-ROUND REFINEMENT (AT LEAST 2 DISTINCT SEARCH ROUNDS)
+   - After inspecting broad results, run at least TWO distinct narrowing searches that refine candidates based on what you observed.
+   - Concrete refinement examples:
+     - Restrict to a subdirectory: rg -n "keyword" /workspace/{{ workspace_dir_name }}/subpkg
+     - Search for def/class lines or specific identifiers: rg -n "^def .*|^class .*" /workspace/{{ workspace_dir_name }} | rg "likely_name_or_term"
+     - Search for closely related helper names or constants seen in matches: rg -n "helper_name|CONST_NAME" /workspace/{{ workspace_dir_name }}
+   - For each refinement, record the command and a short rationale (what you learned and how it refines the candidate set).
+
+3) CANDIDATE MANAGEMENT (REPORT BEFORE READING)
+   - After refinement, produce a candidate list (paths + 1-line reason). This list must be ≤ 10 before any file reads.
+   - Only when candidates are narrowed to ≤ 3 are you allowed to open full file contents for deep reading.
+
+4) READ AFTER NARROWING (STRICT LIMITS)
+   - Do NOT open full files early. Permitted lightweight inspections before narrowing:
+     - Use the search output lines, rg context flags, or view ≤30 lines (head/sed) for quick checks.
+   - Full file reads (file_editor view with no view_range OR range >100 lines) are allowed ONLY after you have ≤ 3 plausible candidates and have listed them explicitly.
+   - Before opening files fully, state: "Opening full file(s): <paths>" and justify why they are narrowed to ≤3.
+
+5) VERIFY & WRITE DOCSTRING
+   - Confirm the found {{ module_type }} matches the description by verifying parameters, return values, and side effects in the code.
+   - Insert a triple-quoted docstring with:
+     - One-line summary.
+     - Parameters (names, meanings, types, defaults).
+     - Return values and types.
+     - Important behaviors, exceptions, and side effects.
+   - Avoid changing code outside the docstring. If a change is necessary, document it and why.
+
+6) LOGGING & EXPLANATIONS (REQUIRED)
+   - For every search you run, show the exact command and a 1–2 line rationale.
+   - After refinements, list candidate files and why each is plausible.
+   - Before full-file reads, confirm which files you'll open and why.
+
+Examples of good behavior (follow these patterns):
+- Start: rg -n "serialize_object|deserialize" /workspace/{{ workspace_dir_name }}  (broad)
+- Refine: rg -n "def serialize_object" /workspace/{{ workspace_dir_name }}/pkg/subpkg  (narrower)
+- Further refine: rg -n "def serialize_object.*return" /workspace/{{ workspace_dir_name }}/pkg/subpkg  (different pattern)
+- Only then open the candidate file(s) fully (<=3) to read the implementation and write the docstring.
+
+Forbidden behaviors (non-compliant):
+- Opening a specific file (full read) before a repo-wide broad search.
+- Reading full files early (before narrowing to ≤3).
+- Stopping after a single search round and committing to one candidate.
+
+Follow the broad-then-narrow, multi-round refinement, and read-after-narrowing rules exactly. Log your commands and reasoning as you proceed.
+{% endif %}

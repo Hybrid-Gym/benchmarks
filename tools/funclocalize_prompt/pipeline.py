@@ -7,11 +7,11 @@ Steps:
   2. Run rollout with the new prompt (50 instances, gpt-5-mini).
   3. Convert rollout output to HF dataset format (combine_completions + convert_and_push).
   4. Judge the new trajectories.
-  5. Check convergence (all rubrics >90% or error rate halved vs baseline).
+  5. Check convergence (all rubrics >90% or error rate halved vs baseline or improved by 20%).
   6. If not converged, go to step 1 (max 5 iterations).
 
 Usage (from /home/yiqingxi/benchmarks):
-  uv run python tools/funclocalize_prompt/pipeline.py [--exp-id EXP_ID] [--max-iter 5]
+  uv run python tools/funclocalize_prompt/pipeline.py --max-iter 5 --exp-id $EXP_ID 
 """
 
 from __future__ import annotations
@@ -48,9 +48,9 @@ LLM_CONFIG = str(BENCHMARKS_ROOT / ".llm_config" / "gpt5_mini.json")
 RUNTIME_API_KEY = os.environ.get("RUNTIME_API_KEY") or os.environ.get("REMOTE_KEY", "")
 RUNTIME_API_URL = os.environ.get("RUNTIME_API_URL", "https://runtime.eval.all-hands.dev")
 EVAL_SERVER_IMAGE = os.environ.get(
-    "OPENHANDS_EVAL_AGENT_SERVER_IMAGE", "ghcr.io/yiqingxyq/eval-agent-server"
+    "OPENHANDS_EVAL_AGENT_SERVER_IMAGE", "ghcr.io/hybrid-gym/eval-agent-server"
 )
-IMAGE_TAG_PREFIX = os.environ.get("IMAGE_TAG_PREFIX", "e212d45")
+IMAGE_TAG_PREFIX = os.environ.get("IMAGE_TAG_PREFIX", "e212d45-35d813f")
 
 STRATEGY_KEYS = ("broad_then_narrow", "multi_round_refinement", "read_after_narrowing")
 
@@ -115,9 +115,11 @@ def _check_converged(baseline_scores: dict, iter_scores: dict) -> tuple[bool, st
             reasons.append(f"{k}: {_pct(c)} (>90%)")
         elif (1 - c) <= 0.5 * (1 - b):  # error rate halved
             reasons.append(f"{k}: {_pct(c)} (error rate halved from {_pct(1-b)})")
+        elif c >= b + 0.2:
+            reasons.append(f"{k}: {_pct(c)} (improved by 20% from {_pct(b)})")
         else:
             all_good = False
-            reasons.append(f"{k}: {_pct(c)} (still below threshold)")
+            reasons.append(f"{k}: {_pct(c)} (still below thresholds)")
     return all_good, "; ".join(reasons)
 
 
@@ -136,7 +138,7 @@ def step0_sample_and_judge_baseline(
     out_dir.mkdir(parents=True, exist_ok=True)
     verdicts_path = out_dir / "verdicts.jsonl"
     scores_path = out_dir / "scores.json"
-    rows_path = out_dir / "sampled_rows.jsonl"
+    rows_path = out_dir / "sampled_outputs.jsonl"
 
     if scores_path.exists() and verdicts_path.exists():
         print(f"[Step 0] Cached baseline results found at {out_dir}, skipping.")
@@ -153,7 +155,7 @@ def step0_sample_and_judge_baseline(
     sampled = [ds[i] for i in indices]
 
     # Save sampled rows (without full messages to save space — just ids)
-    _save_jsonl(rows_path, [{"instance_id": r["instance_id"], "resolved": r.get("resolved")} for r in sampled])
+    _save_jsonl(rows_path, sampled)
 
     # Convert to history-event format for judge.py
     judge_rows_data = build_judge_rows(sampled)
@@ -255,14 +257,14 @@ def step2_run_rollout(
     # Total budget: n_limit / 2 workers × 2 attempts × startup_timeout + agent time
     total_timeout = n_limit // 2 * 2 * startup_timeout + 3600
 
-    num_workers = int(os.environ.get("EVAL_NUM_WORKERS", "1"))
+    num_workers = 4
     cmd = [
         "uv", "run", "hybridgym-funclocalize-infer",
         LLM_CONFIG,
         "--workspace", os.environ.get("EVAL_WORKSPACE", "remote"),
         "--num-workers", str(num_workers),
         "--max-iterations", "30",
-        "--max-retries", "1",  # fail fast when cluster is unavailable
+        "--max-retries", "5",
         "--n-limit", str(n_limit),
         "--prompt-path", str(prompt_path.resolve()),
         "--output-dir", str(rollout_dir.resolve()),
@@ -471,8 +473,8 @@ def run_pipeline(exp_id: str, max_iter: int = 5, n_samples: int = 50) -> None:
     # Build fake "trajectory" rows from HF dataset for failure-example extraction
     # (just a stub — we don't save full messages; use empty history so judge writer skips gracefully)
     baseline_trajectories: list[dict] = []
-    if (baseline_dir / "sampled_rows.jsonl").exists():
-        for r in _load_jsonl(baseline_dir / "sampled_rows.jsonl"):
+    if (baseline_dir / "sampled_outputs.jsonl").exists():
+        for r in _load_jsonl(baseline_dir / "sampled_outputs.jsonl"):
             baseline_trajectories.append({"instance_id": r["instance_id"], "history": []})
 
     summary: dict = {
@@ -530,6 +532,7 @@ def run_pipeline(exp_id: str, max_iter: int = 5, n_samples: int = 50) -> None:
         # Step 4: Judge trajectories
         scores, verdicts, trajectories = step4_judge_trajectories(output_jsonl, iter_dir)
         iter_meta["scores"] = scores
+        _print_scores(baseline_scores, "Baseline")
         _print_scores(scores, f"Iteration {iteration}")
 
         prev_iter_scores.append(scores)
