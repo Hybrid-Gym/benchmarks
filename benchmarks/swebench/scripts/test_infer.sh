@@ -1,4 +1,8 @@
 MODEL_NAME="${1:-qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16}"
+CONFIG_NAME=$(basename $MODEL_NAME)
+
+echo $MODEL_NAME 
+echo $CONFIG_NAME
 
 export SDK_SHORT_SHA="e212d45"
 export IMAGE_TAG_PREFIX="e212d45-35d813f"
@@ -7,10 +11,7 @@ export OPENHANDS_EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export RUNTIME_API_KEY=$REMOTE_KEY
 
-# Optional: Override default runtime API URL
-# export RUNTIME_API_URL="https://runtime.eval.all-hands.dev" 
-
-uv run swebench-infer .llm_config/${MODEL_NAME}.json \
+uv run swebench-infer .llm_config/${CONFIG_NAME}.json \
     --dataset princeton-nlp/SWE-bench_Verified \
     --select benchmarks/swebench/easy50_instances.txt \
     --split test \
