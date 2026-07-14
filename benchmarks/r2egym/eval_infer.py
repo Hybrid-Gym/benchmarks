@@ -31,7 +31,10 @@ from pathlib import Path
 from benchmarks.r2egym import constants
 from benchmarks.r2egym.config import EVAL_DEFAULTS
 from benchmarks.r2egym.dataset import get_dataset
-from benchmarks.utils.patch_utils import remove_files_from_patch
+from benchmarks.utils.patch_utils import (
+    remove_files_from_patch,
+    remove_noise_from_patch,
+)
 from openhands.sdk import get_logger
 
 
@@ -295,6 +298,7 @@ def load_predictions(input_file: str) -> dict[str, str]:
                 continue
             patch = (data.get("test_result") or {}).get("git_patch", "") or ""
             patch = remove_files_from_patch(patch, constants.SETUP_FILES_TO_REMOVE)
+            patch = remove_noise_from_patch(patch)
             preds[instance_id] = patch
     return preds
 

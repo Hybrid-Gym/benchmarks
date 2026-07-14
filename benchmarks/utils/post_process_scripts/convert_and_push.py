@@ -178,7 +178,7 @@ def main():
         repo_id=args.repo,
         split="train",
         token=args.token,
-        commit_message=f"Add {len(upload_rows)} non-fncall trajectories (claude-opus-4-7 funclocalize)",
+        commit_message=f"Add {len(upload_rows)} non-fncall trajectories ({args.repo.split('/')[-1]})",
     )
     print(f"Pushed: {url}")
 
