@@ -25,5 +25,28 @@ uv run python -m benchmarks.swegym.build_images \
 
 ### Running rollouts
 
-This is not supported yet for SWE-Gym because the primary purpose of this directory is fast and smooth creation of Docker images.
+SWE-Gym instances use the SWE-bench schema, so the rollout reuses
+`SWEBenchEvaluation` and only swaps the base image resolver to the SWE-Gym image
+set (`docker.io/xingyaoww/sweb.eval.x86_64.<instance_id>`). On the local docker
+workspace each agent-server image is built on demand, so no pre-build is needed.
+
+```bash
+# 1 instance (smoke)
+bash benchmarks/swegym/scripts/test_infer.sh
+
+# whole split
+N_LIMIT=0 NUM_WORKERS=8 MODEL_NAME=<llm_config> \
+  bash benchmarks/swegym/scripts/test_infer.sh
+```
+
+Or call the entry point directly:
+
+```bash
+uv run swegym-infer .llm_config/<llm_config>.json \
+  --dataset SWE-Gym/SWE-Gym --split train --workspace docker \
+  --num-workers 8 --max-iterations 60 --n-limit 0
+```
+
+Evaluation is the SWE-bench harness (`FAIL_TO_PASS`/`PASS_TO_PASS`) — SWE-Gym
+ships no separate reward.
 

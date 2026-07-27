@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from typing import Any, List
 
 from jinja2 import Environment, FileSystemLoader
@@ -210,6 +211,10 @@ class SWEBenchEvaluation(Evaluation):
                 server_image=agent_server_image,
                 working_dir="/workspace",
                 forward_env=forward_env or [],
+                # Reclaim disk: delete the built agent-server image when the
+                # workspace is cleaned up. The per-instance official base image
+                # it was built FROM is removed separately in _cleanup_workspace.
+                cleanup_image=True,
             )
         elif self.metadata.workspace_type == "apptainer":
             if not remote_image_exists(agent_server_image):
@@ -281,6 +286,80 @@ class SWEBenchEvaluation(Evaluation):
                 )
             logger.debug(f"Ran env setup command '{cmd}': {res.stdout}")
         return workspace
+
+    # ---- Hook: reclaim per-instance disk after each instance ---------------------
+    def _cleanup_workspace(
+        self,
+        workspace: RemoteWorkspace,
+        instance: EvalInstance,
+        *,
+        capture_archive: bool = True,
+    ) -> None:
+        # Capture the built agent-server image ID BEFORE cleanup untags it. The
+        # local phased build tags the SAME image twice (the requested tag plus a
+        # content-hashed assembly tag); cleanup_image=True only removes one tag,
+        # leaving the multi-GB image alive via the other. Removing by image ID
+        # afterwards drops all remaining tags at once.
+        image_id: str | None = None
+        if self.metadata.workspace_type == "docker":
+            server_image = getattr(workspace, "_image_name", None) or getattr(
+                workspace, "server_image", None
+            )
+            if server_image:
+                inspect = subprocess.run(
+                    ["docker", "image", "inspect", "-f", "{{.Id}}", server_image],
+                    capture_output=True,
+                    text=True,
+                )
+                if inspect.returncode == 0:
+                    image_id = inspect.stdout.strip()
+
+        # Base cleanup stops the container and (with cleanup_image=True) removes
+        # the primary agent-server tag for this instance.
+        super()._cleanup_workspace(workspace, instance, capture_archive=capture_archive)
+
+        # Reclaim the rest of the per-instance disk (docker mode only): any
+        # remaining agent-server tags (by ID) and the official base image the
+        # agent-server image was built FROM. Each SWE-bench instance uses unique
+        # images, so this is safe and prevents disk from filling across a run.
+        # We target exact images only (by ID or exact tag), never a wildcard, so
+        # unrelated images on a shared host are untouched.
+        if self.metadata.workspace_type != "docker":
+            return
+        images_to_remove: list[str] = []
+        if image_id:
+            images_to_remove.append(image_id)
+        try:
+            images_to_remove.append(self.get_official_docker_image(instance))
+        except Exception as e:
+            logger.warning(
+                "[cleanup] could not resolve base image for %s: %s", instance.id, e
+            )
+        for image_ref in images_to_remove:
+            try:
+                result = subprocess.run(
+                    ["docker", "rmi", "-f", image_ref],
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    logger.info(
+                        "[cleanup] removed image %s for %s", image_ref, instance.id
+                    )
+                else:
+                    logger.warning(
+                        "[cleanup] failed to remove image %s for %s: %s",
+                        image_ref,
+                        instance.id,
+                        result.stderr.strip(),
+                    )
+            except Exception as e:
+                logger.warning(
+                    "[cleanup] error removing image %s for %s: %s",
+                    image_ref,
+                    instance.id,
+                    e,
+                )
 
     # ---- Hook: evaluate one instance ---------------------------------------------
     def evaluate_instance(
