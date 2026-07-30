@@ -5,7 +5,6 @@ Shared utilities for batch building agent-server images.
 
 import argparse
 import contextlib
-import fcntl
 import io
 import os
 import shutil
@@ -229,50 +228,6 @@ def _sdk_root() -> Path:
     return benchmarks_root / "vendor" / "software-agent-sdk"
 
 
-@contextlib.contextmanager
-def _sdk_build_file_lock():
-    """Serialize `uv build` on the shared SDK root across processes."""
-    lock_path = Path(tempfile.gettempdir()) / "benchmarks-sdk-sdist-build.lock"
-    with lock_path.open("w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-
-
-# Per-process cache of the shared sdist, so on-demand (inference-time) image
-# builds reuse one tarball instead of each worker running its own `uv build`.
-_SHARED_SDIST: Path | None = None
-_SHARED_SDIST_FAILED = False
-_SHARED_SDIST_LOCK = Lock()
-
-
-def get_shared_sdist() -> Path | None:
-    """Return a process-wide prebuilt SDK sdist, or None if it can't be built.
-
-    Returning None is safe: callers fall back to letting each build make its own
-    sdist, which is the pre-existing (racy) behaviour rather than a hard failure.
-    """
-    global _SHARED_SDIST, _SHARED_SDIST_FAILED
-    with _SHARED_SDIST_LOCK:
-        if _SHARED_SDIST is not None and _SHARED_SDIST.is_file():
-            return _SHARED_SDIST
-        if _SHARED_SDIST_FAILED:
-            return None
-        try:
-            _SHARED_SDIST = _pre_build_sdist()
-        except Exception as e:
-            _SHARED_SDIST_FAILED = True
-            logger.warning(
-                "Could not pre-build shared SDK sdist; each image build will "
-                "make its own (races under concurrency): %s",
-                e,
-            )
-            return None
-        return _SHARED_SDIST
-
-
 def _pre_build_sdist() -> Path:
     """
     Build the SDK sdist once and reuse it across all image builds in a run.
@@ -284,17 +239,12 @@ def _pre_build_sdist() -> Path:
 
     logger.info("Pre-building SDK sdist from %s", sdk_path)
     start = time.monotonic()
-    # `uv build` writes intermediate state inside the shared SDK project root, so
-    # concurrent invocations (multiple rollout processes on one box) can observe
-    # each other's partial artifacts and emit a malformed sdist. Serialize across
-    # processes with a file lock on the SDK root; --out-dir is already per-caller.
-    with _sdk_build_file_lock():
-        proc = subprocess.run(
-            ["uv", "build", "--sdist", "--out-dir", str(sdist_dir)],
-            cwd=str(sdk_path),
-            capture_output=True,
-            text=True,
-        )
+    proc = subprocess.run(
+        ["uv", "build", "--sdist", "--out-dir", str(sdist_dir)],
+        cwd=str(sdk_path),
+        capture_output=True,
+        text=True,
+    )
     if proc.returncode != 0:
         shutil.rmtree(sdist_dir, ignore_errors=True)
         raise RuntimeError(f"Failed to build SDK sdist: {proc.stderr}")
@@ -559,7 +509,6 @@ def ensure_local_image(
         custom_tag=custom_tag,
         target=target,
         push=False,
-        cached_sdist=get_shared_sdist(),
     )
     logger.info(f"Image build output: {output}")
     if output.error is not None:
