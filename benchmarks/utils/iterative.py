@@ -47,6 +47,7 @@ def get_failed_instances(output_file: str, critic: CriticBase) -> Set[EvalInstan
     """
 
     failed_instances: Set[EvalInstanceID] = set()
+    passed_instances: Set[EvalInstanceID] = set()
 
     if not os.path.exists(output_file):
         logger.warning(f"Output file {output_file} does not exist")
@@ -62,6 +63,8 @@ def get_failed_instances(output_file: str, critic: CriticBase) -> Set[EvalInstan
                     # Evaluate using the critic
                     if not evaluate_output(critic, output):
                         failed_instances.add(output.instance_id)
+                    else:
+                        passed_instances.add(output.instance_id)
 
                 except json.JSONDecodeError as e:
                     logger.warning(
@@ -74,6 +77,13 @@ def get_failed_instances(output_file: str, critic: CriticBase) -> Set[EvalInstan
 
     except Exception as e:
         logger.error(f"Error reading output file {output_file}: {e}")
+
+    # An attempt file holds one line per *attempt*, not per instance, and a resumed run
+    # appends more lines for instances it re-ran. An instance that failed once and later
+    # succeeded therefore has both a failing and a passing line. Without this
+    # subtraction it stays in the failed set forever, so every later critic attempt
+    # re-runs work that is already done -- measured 91 of 109 items in attempt 3.
+    failed_instances -= passed_instances
 
     logger.info(f"Found {len(failed_instances)} failed instances in {output_file}")
     return failed_instances

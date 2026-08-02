@@ -502,7 +502,14 @@ class Evaluation(ABC, BaseModel):
             # Instances with no entry in ANY prior attempt (never ran or
             # crashed before producing output) should also be retried.
             never_completed = {inst.id for inst in all_instances} - all_prior_completed
+            # Never re-run an instance that already has a successful trajectory.
+            # Attempt 1 applies this rule via _get_completed_instances(); without the
+            # same rule here, an instance that failed in attempt N-1 but succeeded
+            # earlier is retried again every attempt. Measured on the deepseek run:
+            # 91 of the 109 instances attempt 3 had processed already had a passing
+            # record, i.e. ~83% of the pass was redundant.
             retry_ids = (failed_in_prev | never_completed) - completed_in_attempt
+            retry_ids -= self._get_completed_instances()
             return [inst for inst in all_instances if inst.id in retry_ids]
 
     def _run_iterative_mode(
