@@ -29,7 +29,7 @@ from tqdm import tqdm
 
 from benchmarks.utils.acp import is_acp_agent
 from benchmarks.utils.constants import OUTPUT_FILENAME
-from benchmarks.utils.critics import get_completed_instances
+from benchmarks.utils.critics import evaluate_output, get_completed_instances
 from benchmarks.utils.failure_classifier import FailureCategory, classify_failure
 from benchmarks.utils.iterative import aggregate_results, get_failed_instances
 from benchmarks.utils.laminar import LMNR_ENV_VARS, LaminarEvalMetadata, LaminarService
@@ -193,17 +193,46 @@ class Evaluation(ABC, BaseModel):
     def output_path(self) -> str:
         return os.path.join(self.metadata.eval_output_dir, OUTPUT_FILENAME)
 
-    def _get_completed_instances(self) -> set[EvalInstanceID]:
-        """Return the set of completed instance IDs."""
+    def _get_completed_instances(
+        self, critic: CriticBase | None = None
+    ) -> set[EvalInstanceID]:
+        """Return the set of instance IDs that already have a usable result.
+
+        With a `critic`, only records that pass it count as completed. A run can
+        finish without erroring yet still produce nothing worth keeping -- an
+        empty git patch, or an agent that never called finish -- and
+        `aggregate_results` writes those to output.jsonl all the same because it
+        only filters on `output.error`. Treating them as completed retires the
+        instance permanently: it is skipped by attempt 1 and by every retry
+        attempt, so no later pass can ever repair it. Measured on the deepseek
+        r2egym run, 22 of 1385 recorded instances were stuck this way.
+
+        Without a critic, any record counts (callers that just want "has a row").
+        """
         completed_instances: set[EvalInstanceID] = set()
+        unusable = 0
         if os.path.exists(self.output_path):
             with open(self.output_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    out = json.loads(line)
-                    completed_instances.add(out["instance_id"])
+                for line_num, line in enumerate(f, 1):
+                    try:
+                        out = json.loads(line)
+                        if critic is not None and not evaluate_output(
+                            critic, EvalOutput.model_validate(out)
+                        ):
+                            unusable += 1
+                            continue
+                        completed_instances.add(out["instance_id"])
+                    except Exception as e:
+                        # Stay retryable: a row we cannot judge is not a result.
+                        unusable += 1
+                        logger.warning(
+                            f"Could not evaluate line {line_num} of "
+                            f"{self.output_path} ({e}); leaving it eligible for retry"
+                        )
             logger.info(
                 f"Found {len(completed_instances)} completed instances "
                 f"in {self.output_path}"
+                + (f" ({unusable} unusable, eligible for retry)" if unusable else "")
             )
         return completed_instances
 
@@ -473,7 +502,7 @@ class Evaluation(ABC, BaseModel):
             # Attempt 1: Process everything not yet successfully completed.
             # Use output.jsonl (error-free results) as the source of truth so
             # that instances which ran but errored are retried rather than skipped.
-            successfully_completed = self._get_completed_instances()
+            successfully_completed = self._get_completed_instances(critic)
             return [
                 inst for inst in all_instances if inst.id not in successfully_completed
             ]
@@ -509,7 +538,7 @@ class Evaluation(ABC, BaseModel):
             # 91 of the 109 instances attempt 3 had processed already had a passing
             # record, i.e. ~83% of the pass was redundant.
             retry_ids = (failed_in_prev | never_completed) - completed_in_attempt
-            retry_ids -= self._get_completed_instances()
+            retry_ids -= self._get_completed_instances(critic)
             return [inst for inst in all_instances if inst.id in retry_ids]
 
     def _run_iterative_mode(

@@ -43,6 +43,18 @@ uniq_ids() {
   cat "$@" 2>/dev/null | cut -c1-70 | grep -oP '"instance_id":\s*"\K[^"]+' | sort -u | wc -l
 }
 
+# uniq_ids over-counts success: aggregate_results writes a row for any run that did
+# not raise, including ones that ended with an empty git patch or no finish action.
+# Those are not usable trajectories and still need a retry, so "done" must be judged
+# by the critic. Parsing every row costs ~1-2 min on a ~1GB file, so this is called
+# ONLY when the cheap counter claims completion, never in the polling path.
+critic_pass() {
+  local sel_args=()
+  [ -n "$SELECT" ] && sel_args=(--select "$SELECT")
+  "$REPO/.venv/bin/python3" "$REPO/benchmarks/r2egym/scripts/count_critic_passing.py" \
+    "$RUN_DIR/output.jsonl" "${sel_args[@]}" 2>/dev/null | tail -1
+}
+
 restarts=0
 stalled=0
 MAX_STALLED="${MAX_STALLED:-2}"
@@ -51,8 +63,12 @@ while :; do
   err=$(uniq_ids "$RUN_DIR/output_errors.jsonl")
   done_n=$(uniq_ids "$RUN_DIR/output.jsonl" "$RUN_DIR/output_errors.jsonl")
   if [ "$ok" -ge "$TOTAL" ]; then
-    say "COMPLETE: all $TOTAL instances succeeded. exiting."
-    exit 0
+    real=$(critic_pass)
+    if [ -n "$real" ] && [ "$real" -ge "$TOTAL" ] 2>/dev/null; then
+      say "COMPLETE: all $TOTAL instances have a critic-passing trajectory. exiting."
+      exit 0
+    fi
+    say "records=$ok >= $TOTAL but only ${real:-?} pass the critic; continuing."
   fi
   # Stop on "attempted everything", not "succeeded on everything" -- but only once
   # relaunching stops recovering anything. The runner itself retries (n_critic_runs
@@ -61,7 +77,7 @@ while :; do
   # Some instances never succeed (broken images, task beyond the model), so bail out
   # after MAX_STALLED consecutive launches that recovered no new successes.
   if [ "$done_n" -ge "$TOTAL" ] && [ "$stalled" -ge "$MAX_STALLED" ]; then
-    say "CONVERGED: attempted=$done_n/$TOTAL ok=$ok err=$err; no new successes in $stalled launches. exiting."
+    say "CONVERGED: attempted=$done_n/$TOTAL ok=$ok (critic-passing=$(critic_pass)) err=$err; no new successes in $stalled launches. exiting."
     exit 0
   fi
   if [ "$restarts" -ge "$MAX_RESTARTS" ]; then
