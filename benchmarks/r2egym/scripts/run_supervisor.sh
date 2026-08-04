@@ -85,7 +85,10 @@ while :; do
     exit 1
   fi
 
-  say "launch #$((restarts+1)): ok=$ok err=$err attempted=$done_n/$TOTAL"
+  # Cheap after the first launch: the previous iteration's post-launch count is this
+  # one's baseline, so critic_pass runs once per launch, not twice.
+  [ -n "${pass_before:-}" ] || pass_before=$(critic_pass)
+  say "launch #$((restarts+1)): ok=$ok err=$err attempted=$done_n/$TOTAL critic-passing=${pass_before:-?}"
   # Always re-enter the repo: the crash mode we guard against deletes the CWD.
   cd "$REPO" || exit 1
   MODEL_NAME="$MODEL_NAME" NUM_WORKERS="$NUM_WORKERS" \
@@ -96,14 +99,24 @@ while :; do
 
   new_ok=$(uniq_ids "$RUN_DIR/output.jsonl")
   new_err=$(uniq_ids "$RUN_DIR/output_errors.jsonl")
-  say "exited rc=$rc; progressed ok $ok->$new_ok err $err->$new_err"
+  pass_after=$(critic_pass)
+  # An empty count means the counter itself failed; treat that as "no information"
+  # rather than as "no progress", so a broken helper cannot end the run.
+  [ -n "$pass_after" ] || pass_after="$pass_before"
+  say "exited rc=$rc; progressed ok $ok->$new_ok err $err->$new_err critic-passing ${pass_before:-?}->${pass_after:-?}"
 
-  if [ "$new_ok" -le "$ok" ]; then
+  # Repairing an instance rewrites an existing instance_id, so uniq_ids does NOT move
+  # even when the launch genuinely recovered work. Launch #2 of the deepseek run left
+  # ok at 1404 while critic-passing went 1363->1381; judging "stalled" on uniq_ids
+  # alone counted that as a wasted launch and would have declared CONVERGED with 121
+  # instances still unfilled. Only a launch that moved neither counter is stalled.
+  if [ "$new_ok" -le "$ok" ] && [ "${pass_after:-0}" -le "${pass_before:-0}" ]; then
     stalled=$((stalled+1))
     say "no new successes this launch (stalled=$stalled/$MAX_STALLED)"
   else
     stalled=0
   fi
+  pass_before="$pass_after"
 
   # No forward progress on a non-zero exit means restarting will just re-crash.
   if [ "$rc" -ne 0 ] && [ "$new_ok" -eq "$ok" ] && [ "$new_err" -eq "$err" ]; then
