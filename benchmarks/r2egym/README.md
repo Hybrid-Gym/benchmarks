@@ -165,6 +165,30 @@ to disable.
 | `constants.py` | paths, git identity, build target |
 | `prompts/default.j2` | agent instruction template |
 | `scripts/test_infer.sh` | local docker smoke test |
+| `scripts/run_supervisor.sh` | relaunches a long rollout until every instance has a critic-passing trajectory |
+| `scripts/count_critic_passing.py` | counts instances whose recorded trajectory passes the finish/patch critic |
+| `scripts/batch_eval_dv4f.sh` | batched eval that pauses on low Docker Hub pull budget or low free disk |
+| `scripts/disk_guard_proc.sh` | periodic build-cache and orphaned-image prune |
+
+### Long runs
+
+A multi-day rollout needs a supervisor: `tmux new-session -d -s NAME "cmd"` tears the
+session down the moment `cmd` exits, so a mid-run crash looks identical to "never
+started" (one run sat dead for ~9 hours before this was noticed).
+
+```bash
+tmux new -s r2egym-myrun
+MODEL_NAME=anthropic_opus45_r2egym RUN_NOTE=myrun \
+  RUN_DIR=eval_outputs/r2egym_outputs/.../<run dir> \
+  NUM_WORKERS=4 SELECT=my_instances.txt \
+  bash benchmarks/r2egym/scripts/run_supervisor.sh
+```
+
+Always pass `SELECT` when scoping to a subset — without it `N_LIMIT=0` walks the full
+4578-instance split. Progress is judged by distinct instance ids *and* critic-passing
+count, not by line counts: `output_errors.jsonl` records one line per failed attempt,
+so `wc -l` over-counts badly, and a repaired instance rewrites an existing id without
+moving the distinct-id count.
 
 ## References
 

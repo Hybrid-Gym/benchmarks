@@ -217,3 +217,10 @@ workspace/
 # Evaluation outputs
 eval_outputs/
 builds/
+logs/
+
+# Local runner config (contains API keys)
+config.toml
+
+# sdist/egg build detritus from a stray `pip install .`
+unknown-0.0.0/
