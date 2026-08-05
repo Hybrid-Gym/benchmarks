@@ -52,10 +52,14 @@ EDIT_COMMANDS = {"create", "str_replace", "insert"}
 STRATEGY_KEYS = ("broad_then_narrow", "multi_round_refinement", "read_after_narrowing")
 
 # The gateway sits behind an AWS WAF per-IP rate limiter that 429s in bursts, so a
-# judge call that fails once will usually succeed a few seconds later. Without this
-# a long run silently converts transient 429s into permanent `error` rows.
-MAX_ATTEMPTS = 5
-BACKOFF_BASE_S = 2.0
+# judge call that fails once will usually succeed later. Without this a long run
+# silently converts transient 429s into permanent `error` rows.
+#
+# The window is minutes, not seconds: 5 attempts over a ~45s span still lost 31% of
+# calls while two rollouts were running. These bounds retry over ~6 min total, which
+# rides out a block instead of giving up inside it.
+MAX_ATTEMPTS = 8
+BACKOFF_BASE_S = 3.0
 
 
 JUDGE_SYSTEM = (
