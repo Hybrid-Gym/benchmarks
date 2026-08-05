@@ -2,8 +2,12 @@
 
 Strategies (see prompts/default_loc_strategy.j2):
   1. broad_then_narrow         — broad searches first, then narrow
-  2. multi_round_refinement    — iterative search, multiple rounds
+  2. multi_round_refinement    — multiple distinct keywords, refined across rounds
   3. read_after_narrowing      — read full files only after narrowing to a few candidates
+
+Two input shapes are supported:
+  --src PATH      a rollout output.jsonl, whose rows carry SDK `history` events
+  --hf REPO       a pushed HF dataset, whose rows carry non-fncall `messages`
 
 Usage:
   python tools/funclocalize_judge/judge.py \\
@@ -12,8 +16,16 @@ Usage:
       --out-dir /tmp/verdicts \\
       --filter-ids /tmp/funclocalize_1500_sample300_seed42_ids.txt
 
-A single --src needs --out PATH instead of --out-dir.
+  python tools/funclocalize_judge/judge.py \\
+      --hf synthetic-code-training/func_localize_claude45_1457i \\
+      --out-dir eval_outputs/funclocalize_judge \\
+      --model nvidia/deepseek-ai/deepseek-v4-flash
+
+A single source needs --out PATH instead of --out-dir.
 The judge call goes to the same OpenAI-compatible gateway as the rollouts.
+
+Verdicts are appended as they complete and already-judged instance ids are skipped
+on restart, so an interrupted run resumes instead of re-paying for the same calls.
 """
 
 from __future__ import annotations
@@ -22,8 +34,11 @@ import argparse
 import concurrent.futures
 import json
 import os
+import random
 import re
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +50,12 @@ MAX_TASK_CHARS = 500
 JUDGE_MAX_OUTPUT_TOKENS = 4000  # reasoning models eat most of this internally
 EDIT_COMMANDS = {"create", "str_replace", "insert"}
 STRATEGY_KEYS = ("broad_then_narrow", "multi_round_refinement", "read_after_narrowing")
+
+# The gateway sits behind an AWS WAF per-IP rate limiter that 429s in bursts, so a
+# judge call that fails once will usually succeed a few seconds later. Without this
+# a long run silently converts transient 429s into permanent `error` rows.
+MAX_ATTEMPTS = 5
+BACKOFF_BASE_S = 2.0
 
 
 JUDGE_SYSTEM = (
@@ -63,10 +84,12 @@ Below is a condensed log of the agent's actions and observations BEFORE its firs
    Non-compliant if the agent opens a specific file before any broad search, or never narrows.
 
 2. MULTI-ROUND REFINEMENT
-   Compliant if the agent runs >=2 distinct search commands where later ones clearly refine
-   earlier ones (different keywords / restricted path / different pattern) based on what it
-   learned from prior results.
-   Non-compliant if the agent commits to a single candidate after just one search.
+   Compliant if the agent tries >=2 DISTINCT keywords/patterns while localizing the file or
+   function, with later searches refining earlier ones (a different term drawn from the
+   description, a restricted path, a different surrounding pattern) based on what it learned
+   from prior results.
+   Non-compliant if the agent only ever searches one keyword, or commits to a single candidate
+   after just one search. Re-running the same keyword unchanged does not count as a second one.
 
 3. READ AFTER NARROWING
    Compliant if "full" file reads (file_editor view with no view_range OR with a large range
@@ -168,11 +191,112 @@ def summarize_event(ev: dict) -> str | None:
 
 def trajectory_summary(events: list[dict]) -> str:
     lines = [s for s in (summarize_event(ev) for ev in events) if s]
+    return _join_and_truncate(lines)
+
+
+def _join_and_truncate(lines: list[str]) -> str:
     body = "\n".join(lines)
     if len(body) > MAX_TRAJECTORY_CHARS:
         half = MAX_TRAJECTORY_CHARS // 2
         body = body[:half] + "\n[... trajectory truncated ...]\n" + body[-half:]
     return body
+
+
+# ---- non-fncall `messages` extraction ------------------------------------
+#
+# Trajectories pushed to the Hub are stored in the non-fncall chat format, where a
+# tool call is text inside the assistant turn rather than a structured field:
+#
+#   <function=terminal>
+#   <parameter=command>grep -rn "excepthook" .</parameter>
+#   </function>
+#
+# and the result comes back as a user turn prefixed "EXECUTION RESULT of [function]:".
+# The summaries below deliberately mirror summarize_event()'s output so the judge
+# prompt sees the same shape regardless of which source the trajectory came from.
+
+_FUNCTION_RE = re.compile(
+    r"<function=([A-Za-z_][A-Za-z0-9_]*)>(.*?)</function>", re.DOTALL
+)
+_PARAMETER_RE = re.compile(
+    r"<parameter=([A-Za-z_][A-Za-z0-9_]*)>(.*?)</parameter>", re.DOTALL
+)
+_RESULT_PREFIX = "EXECUTION RESULT of [function]:"
+_THINK_SPLIT_RE = re.compile(r"</think>", re.IGNORECASE)
+
+
+def parse_function_blocks(content: str) -> list[tuple[str, dict[str, str]]]:
+    """Extract (tool_name, params) for each non-fncall block in an assistant turn."""
+    return [
+        (m.group(1), {k: v.strip() for k, v in _PARAMETER_RE.findall(m.group(2))})
+        for m in _FUNCTION_RE.finditer(content)
+    ]
+
+
+def _summarize_call(name: str, args: dict[str, str]) -> str | None:
+    if name == "terminal":
+        return f"[terminal] {args.get('command', '')[:240]}"
+    if name == "file_editor":
+        cmd = args.get("command", "view")
+        path = args.get("path", "")
+        if cmd == "view":
+            vr = args.get("view_range")
+            return (
+                f"[file_editor view {path}{f' range={vr}' if vr else ' (whole file)'}]"
+            )
+        return f"[file_editor {cmd} {path}]"
+    if name == "think":
+        return f"[think] {args.get('thought', '')[:200]}"
+    if name == "task_tracker":
+        return f"[task_tracker] {args.get('command', '')}"
+    if name == "finish":
+        return f"[finish] {args.get('message', '')[:120]}"
+    return None
+
+
+def summarize_messages(messages: list[dict]) -> tuple[str, str]:
+    """Return (task_description, condensed pre-edit trajectory) for a messages row."""
+    task = ""
+    lines: list[str] = []
+    stop = False
+
+    for msg in messages:
+        if stop:
+            break
+        role, content = msg.get("role"), (msg.get("content") or "")
+
+        if role == "system":
+            continue
+
+        if role == "user":
+            if content.startswith(_RESULT_PREFIX):
+                body = content[len(_RESULT_PREFIX) :].strip()
+                if body:
+                    lines.append(f"[result] {body[:280]}")
+            elif not task:
+                # The first non-result user turn is the task prompt.
+                task = content[:MAX_TASK_CHARS]
+            continue
+
+        if role != "assistant":
+            continue
+
+        calls = parse_function_blocks(content)
+        # Reasoning models emit "<thought></think>" before the call; keep the prose
+        # so the judge can see the agent's stated search intent, not just commands.
+        prose = _THINK_SPLIT_RE.split(_FUNCTION_RE.sub("", content))[-1].strip()
+        if prose:
+            lines.append(f"[think] {prose[:300]}")
+
+        for name, args in calls:
+            if name == "file_editor" and args.get("command") in EDIT_COMMANDS:
+                stop = True  # localization phase ends at the first edit
+                break
+            summary = _summarize_call(name, args)
+            if summary:
+                lines.append(summary)
+
+    return task, _join_and_truncate(lines)
 
 
 # ---- LLM judge -----------------------------------------------------------
@@ -185,34 +309,47 @@ def _strip_fences(raw: str) -> str:
     return _FENCE_RE.sub("", raw).strip()
 
 
+def _call_with_retry(client: OpenAI, model: str, prompt: str) -> str:
+    last: Exception | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": JUDGE_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:  # noqa: BLE001 - any gateway failure is retryable
+            last = e
+            if attempt < MAX_ATTEMPTS - 1:
+                # Jittered, so a burst of workers that all got 429'd does not
+                # synchronise and re-trip the per-IP limiter together.
+                time.sleep(BACKOFF_BASE_S * (2**attempt) * (0.5 + random.random()))
+    raise last if last else RuntimeError("no attempts made")
+
+
 def judge_one(client: OpenAI, model: str, row: dict) -> dict:
     iid = row["instance_id"]
-    events = extract_localization_phase(row.get("history") or [])
-    summary = trajectory_summary(events)
+    if row.get("messages") is not None:
+        task, summary = summarize_messages(row["messages"])
+    else:
+        history = row.get("history") or []
+        task = extract_task_description(history)
+        summary = trajectory_summary(extract_localization_phase(history))
     if not summary.strip():
         return {"instance_id": iid, "error": "no localization actions"}
 
+    prompt = JUDGE_USER_TEMPLATE.format(
+        task_description=task, trajectory_summary=summary
+    )
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": JUDGE_SYSTEM},
-                {
-                    "role": "user",
-                    "content": JUDGE_USER_TEMPLATE.format(
-                        task_description=extract_task_description(
-                            row.get("history") or []
-                        ),
-                        trajectory_summary=summary,
-                    ),
-                },
-            ],
-            max_tokens=JUDGE_MAX_OUTPUT_TOKENS,
-        )
+        raw = _strip_fences(_call_with_retry(client, model, prompt))
     except Exception as e:
         return {"instance_id": iid, "error": f"api: {e}"}
 
-    raw = _strip_fences((resp.choices[0].message.content or "").strip())
     try:
         verdict = json.loads(raw)
     except Exception as e:
@@ -250,6 +387,41 @@ def load_rows(path: Path, keep: set[str] | None, limit: int) -> list[dict]:
         if limit and len(rows) >= limit:
             break
     return rows
+
+
+def load_hf_rows(
+    repo: str, split: str, keep: set[str] | None, limit: int
+) -> list[dict]:
+    from datasets import load_dataset
+
+    ds = load_dataset(repo, split=split)
+    rows: list[dict] = []
+    for raw in ds:
+        # Iterating a Dataset is typed as yielding the column-slice union rather
+        # than a row mapping, so narrow it before subscripting.
+        row: dict = dict(raw)  # type: ignore[arg-type]
+        if keep is not None and row["instance_id"] not in keep:
+            continue
+        rows.append({"instance_id": row["instance_id"], "messages": row["messages"]})
+        if limit and len(rows) >= limit:
+            break
+    return rows
+
+
+def load_done_ids(path: Path) -> set[str]:
+    """Instance ids already judged, so a restart skips them."""
+    if not path.exists():
+        return set()
+    done = set()
+    for line in path.read_text().splitlines():
+        try:
+            v = json.loads(line)
+        except Exception:
+            continue  # a torn final line from a killed run
+        # Errored rows are retried; only successful verdicts count as done.
+        if not v.get("error") and v.get("instance_id"):
+            done.add(v["instance_id"])
+    return done
 
 
 def aggregate(verdicts: list[dict]) -> dict:
@@ -300,13 +472,20 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--src",
         action="append",
-        required=True,
+        default=[],
         help="Rollout output.jsonl; repeat for head-to-head comparison",
     )
-    p.add_argument("--out", help="Output verdicts JSONL (use with a single --src)")
+    p.add_argument(
+        "--hf",
+        action="append",
+        default=[],
+        help="HF dataset repo of pushed trajectories (messages format); repeatable",
+    )
+    p.add_argument("--hf-split", default="train", help="Split for --hf sources")
+    p.add_argument("--out", help="Output verdicts JSONL (use with a single source)")
     p.add_argument(
         "--out-dir",
-        help="Directory for verdicts JSONLs (use with multiple --src); filenames derived from each src's parent dir",
+        help="Directory for verdicts JSONLs (use with multiple sources); filenames derived from each source's label",
     )
     p.add_argument(
         "--filter-ids",
@@ -323,7 +502,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--workers", type=int, default=8)
     p.add_argument(
-        "--limit", type=int, default=0, help="Per-src trajectory cap (debug)"
+        "--limit", type=int, default=0, help="Per-source trajectory cap (debug)"
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Re-judge every trajectory instead of skipping ids already in the output",
     )
     return p
 
@@ -331,12 +515,15 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
 
+    sources = [("src", s) for s in args.src] + [("hf", h) for h in args.hf]
+    if not sources:
+        sys.exit("error: at least one --src or --hf is required")
     if not args.api_key:
         sys.exit("error: --api-key required (or set LLM_API_KEY)")
-    if len(args.src) == 1 and not args.out:
-        sys.exit("error: --out required when a single --src is given")
-    if len(args.src) > 1 and not args.out_dir:
-        sys.exit("error: --out-dir required when multiple --src are given")
+    if len(sources) == 1 and not (args.out or args.out_dir):
+        sys.exit("error: --out or --out-dir required")
+    if len(sources) > 1 and not args.out_dir:
+        sys.exit("error: --out-dir required when multiple sources are given")
 
     keep: set[str] | None = None
     if args.filter_ids:
@@ -355,31 +542,48 @@ def main() -> None:
     labels: list[str] = []
     aggs: list[dict] = []
 
-    for src_str in args.src:
-        src = Path(src_str)
-        label = short_label(src.parent.name)
+    for kind, ref in sources:
+        if kind == "src":
+            label = short_label(Path(ref).parent.name)
+            rows = load_rows(Path(ref), keep, args.limit)
+        else:
+            label = ref.split("/")[-1]
+            rows = load_hf_rows(ref, args.hf_split, keep, args.limit)
         labels.append(label)
-
-        rows = load_rows(src, keep, args.limit)
-        print(
-            f"\nJudging {len(rows)} trajectories from {label} (model={args.model}, workers={args.workers})",
-            file=sys.stderr,
-        )
-
-        verdicts: list[dict] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-            futures = [ex.submit(judge_one, client, args.model, r) for r in rows]
-            for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
-                verdicts.append(fut.result())
-                if i % 25 == 0:
-                    print(f"  {i}/{len(rows)}", file=sys.stderr)
 
         if args.out:
             out_path = Path(args.out)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
         else:
             Path(args.out_dir).mkdir(parents=True, exist_ok=True)
             out_path = Path(args.out_dir) / f"{label}.verdicts.jsonl"
-        out_path.write_text("".join(json.dumps(v) + "\n" for v in verdicts))
+
+        done = set() if args.no_resume else load_done_ids(out_path)
+        if args.no_resume and out_path.exists():
+            out_path.unlink()
+        pending = [r for r in rows if r["instance_id"] not in done]
+        if done:
+            print(f"Resuming {label}: {len(done)} already judged", file=sys.stderr)
+        print(
+            f"\nJudging {len(pending)} trajectories from {label} "
+            f"(model={args.model}, workers={args.workers})",
+            file=sys.stderr,
+        )
+
+        # Append as results land: a multi-thousand-row run over a rate-limited
+        # gateway takes hours, and buffering to the end loses everything on a kill.
+        write_lock = threading.Lock()
+        with out_path.open("a") as fh:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
+                futures = [ex.submit(judge_one, client, args.model, r) for r in pending]
+                for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
+                    with write_lock:
+                        fh.write(json.dumps(fut.result()) + "\n")
+                        fh.flush()
+                    if i % 25 == 0:
+                        print(f"  {i}/{len(pending)}", file=sys.stderr)
+
+        verdicts = [json.loads(ln) for ln in out_path.read_text().splitlines() if ln]
         print(f"Wrote {len(verdicts)} verdicts → {out_path}", file=sys.stderr)
 
         agg = aggregate(verdicts)
