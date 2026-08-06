@@ -97,3 +97,26 @@ At least one `--src` or `--hf` is required.
 ```
 
 Errored rows record `error` (and `raw` for parse failures) in place of the booleans.
+
+A retry appends a fresh verdict rather than rewriting the old row, so a verdicts file
+can hold several rows per instance. Readers must take the **last** row per
+`instance_id` — counting lines over-reports, and counting `error` rows anywhere in the
+file reports failures that were later repaired.
+
+## Publishing labels
+
+`push_labels.py` joins a verdicts file back onto the dataset it was judged from and
+pushes a new revision with `broad_then_narrow`, `multi_round_refinement`,
+`read_after_narrowing` and `judge_notes` added. Existing columns are untouched, so
+loaders that only read `messages`/`resolved` keep working.
+
+```bash
+python tools/funclocalize_judge/push_labels.py \
+    --repo synthetic-code-training/func_localize_claude45_1457i \
+    --repo synthetic-code-training/func_localize_claude47_1467i \
+    --repo synthetic-code-training/func_localize_kimi_k25_1431i \
+    --dry-run          # drop to push; --dest-suffix _labeled writes a copy instead
+```
+
+It aborts unless every dataset row has a verdict: a partially labelled dataset reads as
+"these ones are False" and would quietly bias any selection built on it.

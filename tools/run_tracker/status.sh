@@ -58,10 +58,22 @@ if [ -d "$jdir" ]; then
   echo "judge verdicts:"
   for f in "$jdir"/*.verdicts.jsonl; do
     [ -f "$f" ] || continue
-    n=$(wc -l < "$f")
-    # grep -c prints 0 and exits 1 on no match, so a `|| echo 0` fallback would
-    # emit a second 0 and break the row's formatting.
-    e=$(grep -c '"error"' "$f" 2>/dev/null); e=${e:-0}
+    # Same distinct-id rule as the rollouts: a retried trajectory appends a fresh
+    # verdict instead of rewriting the old one, so line counts over-report progress
+    # and superseded error rows read as permanent failures. Last row per id wins.
+    read -r n e < <(python3 - "$f" <<'PY'
+import json, sys
+
+last: dict[str, bool] = {}
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        row = json.loads(line)
+    except Exception:
+        continue
+    last[row.get("instance_id")] = bool(row.get("error"))
+print(len(last), sum(last.values()))
+PY
+)
     printf '  %-42s %5s judged  %4s errored  (idle %s)\n' \
       "$(basename "$f" .verdicts.jsonl)" "$n" "$e" "$(age "$f")"
   done
