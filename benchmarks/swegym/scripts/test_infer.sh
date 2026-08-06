@@ -20,6 +20,10 @@ MAX_ITERATIONS="${MAX_ITERATIONS:-60}"
 N_LIMIT="${N_LIMIT:-1}"          # 1 = quick smoke; set 0 for the whole split
 RUN_NOTE="${RUN_NOTE:-swegym-smoke}"
 OUTPUT_DIR="${OUTPUT_DIR:-./eval_outputs/swegym_outputs}"
+# Optional file of instance ids to restrict the run to, e.g.
+# eval_outputs/swegym_select_1500.txt. Without it N_LIMIT=0 walks the FULL
+# 2438-instance train split, not the shared cross-model subset.
+SELECT="${SELECT:-}"
 
 # Pin the agent-server image tag prefix to the SDK short sha (matches the built
 # images and avoids the content-hash mismatch seen on local docker builds).
@@ -29,6 +33,12 @@ echo "LLM_CONFIG=${LLM_CONFIG}"
 echo "DATASET=${DATASET} SPLIT=${SPLIT} NUM_WORKERS=${NUM_WORKERS} N_LIMIT=${N_LIMIT}"
 echo "IMAGE_TAG_PREFIX=${IMAGE_TAG_PREFIX}"
 
+SELECT_ARGS=()
+if [ -n "${SELECT}" ]; then
+    echo "SELECT=${SELECT} ($(wc -l < "${SELECT}") instances)"
+    SELECT_ARGS=(--select "${SELECT}")
+fi
+
 uv run swegym-infer "${LLM_CONFIG}" \
     --dataset "${DATASET}" \
     --split "${SPLIT}" \
@@ -37,4 +47,5 @@ uv run swegym-infer "${LLM_CONFIG}" \
     --max-iterations "${MAX_ITERATIONS}" \
     --n-limit "${N_LIMIT}" \
     --note "${RUN_NOTE}" \
+    "${SELECT_ARGS[@]}" \
     --output-dir "${OUTPUT_DIR}"
