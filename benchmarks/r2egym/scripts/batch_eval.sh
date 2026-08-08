@@ -88,10 +88,17 @@ prune_ours() {
 
 # Pull a batch's images through the cache and retag to canonical, so the eval's
 # `docker run` finds them locally. Cache hits cost no Docker Hub quota.
+#
+# Prefetching holds every image of the batch on disk at once, which undoes the eval's
+# own one-image-at-a-time bound (it deletes each image right after use). With ~2-5GB
+# per image that is 50-125GB for a batch of 25 -- so this stops as soon as free disk
+# reaches the floor and lets the eval pull the rest itself as it goes. Keep batches
+# small for the same reason.
 prefetch_batch() {
-  local batch="$1" hit=0 miss=0
+  local batch="$1" hit=0 miss=0 stopped=0
   while read -r img; do
     [ -z "$img" ] && continue
+    if [ "$(free_gb)" -lt "$MIN_FREE_GB" ]; then stopped=1; break; fi
     docker image inspect "$img" >/dev/null 2>&1 && { hit=$((hit + 1)); continue; }
     if docker pull -q "$CACHE/$img" >/dev/null 2>&1; then
       docker tag "$CACHE/$img" "$img" >/dev/null 2>&1
@@ -116,7 +123,11 @@ for img in df["docker_image"]:
     print(str(img))
 PY
   )
-  say "  prefetch: $miss fetched via cache, $hit already local"
+  if [ "$stopped" = "1" ]; then
+    say "  prefetch: $miss via cache, $hit local, STOPPED early at disk floor (${MIN_FREE_GB}G)"
+  else
+    say "  prefetch: $miss fetched via cache, $hit already local"
+  fi
 }
 
 say "eval start: src=$SRC batches=$(ls "$BATCH_DIR"/batch_*.txt 2>/dev/null | wc -l) W=$W min_budget=$MIN_BUDGET min_free=${MIN_FREE_GB}G prune_below=${PRUNE_FREE_GB}G prefetch=$PREFETCH"
