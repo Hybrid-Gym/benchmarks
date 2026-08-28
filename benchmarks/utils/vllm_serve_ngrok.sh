@@ -1,5 +1,6 @@
 MODEL_HF_NAME="${1:-synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16}"
-STORAGE_DIR="${2:-/home/yiqingxi}"
+NGROK_ACCOUNT_ID=${2:-1}
+STORAGE_DIR="${3:-/home/yiqingxi}"
 
 MAX_MODEL_LEN=32768
 
@@ -7,6 +8,8 @@ MODEL_SAVE_NAME=$(basename $MODEL_HF_NAME)
 MODEL_SAVE_NAME=${MODEL_SAVE_NAME//./}
 CHECKPOINT_DIR="$STORAGE_DIR/checkpoints/$MODEL_SAVE_NAME"
 CONFIG_FILE=".llm_config/${MODEL_SAVE_NAME}.json"
+
+NGROK_CONFIG_FILE=/home/yiqingxi/.config/ngrok/ngrok${NGROK_ACCOUNT_ID}.yml
 
 if [ ! -d "$CHECKPOINT_DIR" ]; then
   echo "Downloading checkpoint $MODEL_HF_NAME to $CHECKPOINT_DIR ..."
@@ -23,9 +26,10 @@ fi
 
 
 API_KEY="api_key"
-PORT=2333
-NGROK_API="http://127.0.0.1:4040/api/tunnels"
-NGROK_LOG="${STORAGE_DIR}/tmp/ngrok.log"
+PORT=$((2333 + NGROK_ACCOUNT_ID))
+NGROK_PORT=$((4040 + NGROK_ACCOUNT_ID))
+NGROK_API="http://127.0.0.1:$NGROK_PORT/api/tunnels"
+NGROK_LOG="${STORAGE_DIR}/tmp/ngrok${NGROK_ACCOUNT_ID}.log"
 
 stop_existing_endpoint() {
     # Stop existing ngrok processes.
@@ -77,7 +81,7 @@ start_vllm() {
 start_ngrok_tunnel() {
     echo "Starting ngrok tunnel for port $PORT ..."
 
-    ngrok http "$PORT" > "$NGROK_LOG" 2>&1 &
+    ngrok http "$PORT" --config "$NGROK_CONFIG_FILE" > "$NGROK_LOG" 2>&1 &
 
     NGROK_PID=$!
     echo "ngrok PID: $NGROK_PID"
