@@ -39,12 +39,28 @@ while true; do
 
   if [ -n "$used_gb" ] && [ "$used_gb" -ge "$CAP_GB" ]; then
     say "cache ${used_gb}G >= cap ${CAP_GB}G -> wiping"
-    docker stop "$CONTAINER" >/dev/null 2>&1
+    # Delete from INSIDE the container. registry:2 runs as root and its blobs are
+    # root-owned, but this guard runs as an unprivileged user, so the host-side
+    # `rm -rf "$CACHE_DIR/docker"` this used to do failed with EPERM -- and because
+    # the failure went to the tmux pane rather than the log, and the next line
+    # reported success unconditionally, the cap silently stopped being enforced.
+    # It logged "wiped and restarted; now 670G" while the cap was 300G, and the
+    # cache had grown to 670G by 2026-08-10, taking / to 98% full.
     # Delete only the registry's own data subtree, never $CACHE_DIR itself, so a
     # mistyped/empty CACHE_DIR cannot turn this into an rm of something else.
-    rm -rf "${CACHE_DIR:?}/docker"
-    docker start "$CONTAINER" >/dev/null 2>&1
-    say "wiped and restarted; now $(du -sBG "$CACHE_DIR" 2>/dev/null | cut -f1)"
+    if ! docker exec "$CONTAINER" rm -rf /var/lib/registry/docker 2>>"$LOG"; then
+      say "ERROR: in-container wipe failed; cache still ${used_gb}G (cap ${CAP_GB}G)"
+      sleep "$INTERVAL"
+      continue
+    fi
+    docker restart "$CONTAINER" >/dev/null 2>&1
+    # Never report success without measuring: that is exactly how this went unnoticed.
+    now_gb=$(du -sBG "$CACHE_DIR" 2>/dev/null | cut -f1 | tr -dc '0-9')
+    if [ -n "$now_gb" ] && [ "$now_gb" -ge "$CAP_GB" ]; then
+      say "ERROR: wipe did not shrink cache (${used_gb}G -> ${now_gb}G, cap ${CAP_GB}G)"
+    else
+      say "wiped and restarted; ${used_gb}G -> ${now_gb:-?}G free=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')G"
+    fi
   else
     say "cache=${used_gb:-?}G / ${CAP_GB}G cap | disk ${free_gb}G free"
   fi

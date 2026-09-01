@@ -33,7 +33,16 @@ declare -A CONFIG=(
   [dv4f]=anthropic_deepseek_v4_flash_r2egym
   [gpt5mini]=anthropic_gpt5_mini_azuredirect_r2egym
   [kimi25]=anthropic_kimi_k25_r2egym
+  # deepseek-v4-pro, added 2026-08-12 as the candidate replacement for dv4f, whose
+  # endpoint returns tool-call-less responses under real (long) agent contexts.
+  [dv4pro]=anthropic_deepseek_v4_pro_r2egym
+  # opus45, added 2026-08-19: kimi25 killed at 1359/1500 to free the whole 8-worker
+  # budget for a max-parallelism opus-4.5 push before the Fri deadline. Reuses the
+  # r2egym config (model/key/base_url only, per the comment above).
+  [opus45]=anthropic_opus45_r2egym
 )
+# dv4pro/opus45 are excluded from ALL on purpose: `launch_runs.sh all` should not
+# silently add an extra rollout to a budget that is already full.
 ALL="qwen80b dv4f gpt5mini kimi25"
 
 targets="$*"
