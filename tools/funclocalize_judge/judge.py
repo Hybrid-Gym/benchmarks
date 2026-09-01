@@ -68,8 +68,12 @@ JUDGE_SYSTEM = (
     "respond ONLY with the requested JSON."
 )
 
+DEFAULT_TASK_FRAMING = (
+    "locate a python function/class from a behavior description, then add a docstring"
+)
+
 JUDGE_USER_TEMPLATE = """\
-The agent's task: locate a python function/class from a behavior description, then add a docstring.
+The agent's task: {task_framing}.
 
 Below is a condensed log of the agent's actions and observations BEFORE its first edit.
 
@@ -335,7 +339,7 @@ def _call_with_retry(client: OpenAI, model: str, prompt: str) -> str:
     raise last if last else RuntimeError("no attempts made")
 
 
-def judge_one(client: OpenAI, model: str, row: dict) -> dict:
+def judge_one(client: OpenAI, model: str, row: dict, task_framing: str) -> dict:
     iid = row["instance_id"]
     if row.get("messages") is not None:
         task, summary = summarize_messages(row["messages"])
@@ -347,7 +351,7 @@ def judge_one(client: OpenAI, model: str, row: dict) -> dict:
         return {"instance_id": iid, "error": "no localization actions"}
 
     prompt = JUDGE_USER_TEMPLATE.format(
-        task_description=task, trajectory_summary=summary
+        task_framing=task_framing, task_description=task, trajectory_summary=summary
     )
     try:
         raw = _strip_fences(_call_with_retry(client, model, prompt))
@@ -499,6 +503,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         default=os.environ.get("JUDGE_MODEL", "openai/openai/gpt-5-mini"),
     )
+    p.add_argument(
+        "--task-framing",
+        default=DEFAULT_TASK_FRAMING,
+        help=(
+            "One-sentence description of what the agent was asked to do, inserted "
+            "into the judge prompt as 'The agent's task: <this>.'. The 3 strategies "
+            "score generic search behaviour, but the wrong framing (e.g. the "
+            "funclocalize default on a bug-fix dataset) misdescribes the task to "
+            "the judge. Default matches the funclocalize docstring-localization task."
+        ),
+    )
     p.add_argument("--api-key", default=os.environ.get("LLM_API_KEY"))
     p.add_argument(
         "--base-url",
@@ -579,7 +594,10 @@ def main() -> None:
         write_lock = threading.Lock()
         with out_path.open("a") as fh:
             with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex:
-                futures = [ex.submit(judge_one, client, args.model, r) for r in pending]
+                futures = [
+                    ex.submit(judge_one, client, args.model, r, args.task_framing)
+                    for r in pending
+                ]
                 for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
                     with write_lock:
                         fh.write(json.dumps(fut.result()) + "\n")

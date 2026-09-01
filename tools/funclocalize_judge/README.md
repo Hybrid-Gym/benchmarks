@@ -42,6 +42,16 @@ python tools/funclocalize_judge/judge.py \
     --out-dir eval_outputs/funclocalize_judge \
     --model nvidia/deepseek-ai/deepseek-v4-flash \
     --workers 3
+
+# Same 3 strategies on a different task shape (e.g. R2E-Gym bug-fix trajectories) --
+# override --task-framing, or the judge prompt misdescribes the task to itself
+python tools/funclocalize_judge/judge.py \
+    --hf synthetic-code-training/r2egym_gpt5mini_1500i \
+    --hf synthetic-code-training/r2egym_qwen3next80b_1500i \
+    --out-dir eval_outputs/funclocalize_judge \
+    --model nvidia/deepseek-ai/deepseek-v4-flash \
+    --task-framing "given a GitHub issue describing a bug in the repository, locate the file(s)/function(s) that need to change to fix it, before making any edits" \
+    --workers 2
 ```
 
 Verdicts are appended as each call returns and already-judged ids are skipped on
@@ -76,6 +86,7 @@ Single rollout: pass one `--src` plus `--out PATH` instead of `--out-dir`.
 | `--out-dir DIR` | — | verdicts directory (multiple sources); filenames derived from each source's label |
 | `--filter-ids PATH` | none | newline-separated instance IDs to restrict judging |
 | `--model` | `openai/openai/gpt-5-mini` | judge model |
+| `--task-framing` | funclocalize's docstring-localization task | one-sentence task description inserted into the judge prompt; override for non-funclocalize data |
 | `--api-key` | `$LLM_API_KEY` | gateway key |
 | `--base-url` | `$LLM_BASE_URL` or NVIDIA gateway | gateway base URL |
 | `--workers` | 8 | concurrent judge calls |
