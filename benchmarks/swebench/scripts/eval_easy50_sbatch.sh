@@ -1,14 +1,17 @@
 #!/bin/bash
 
-#SBATCH --time=8:00:00
-#SBATCH --gres=gpu:A6000:1
+#SBATCH --time=12:00:00
+#SBATCH --gres=gpu:1
 #SBATCH --job-name=agent
-#SBATCH --partition=debug
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
 #SBATCH --output=/home/yiqingxi/tmp/eval%A.out
 #SBATCH --mail-user=yiqingxi@andrew.cmu.edu
 #SBATCH --mail-type=END,FAIL
 
 MODEL_HF_NAME="${1:-synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16}"
+NGROK_ACCOUNT_ID="${2:-1}"
+MAX_ITER="${3:-60}"
 
 MODEL_NAME=$(basename $MODEL_HF_NAME)
 MODEL_NAME=${MODEL_NAME//./}
@@ -24,7 +27,7 @@ echo "Node(s): $SLURM_JOB_NODELIST"
 nvidia-smi --query-gpu=pci.bus_id
 nvidia-smi -q -d PAGE_RETIREMENT
 
-OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/${MODEL_NAME}_sdk_${SDK_SHORT_SHA}_maxiter_60 
+OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/${MODEL_NAME}_sdk_${SDK_SHORT_SHA}_maxiter_${MAX_ITER} 
 REPORT_FILE=$OUTPUT_DIR/output.report.json
 
 check_model_served() {
@@ -49,7 +52,7 @@ else
     echo "Running evaluation block..."
 
     CONFIG_FILE=".llm_config/${MODEL_NAME}.json"
-    bash benchmarks/utils/vllm_serve_ngrok.sh $MODEL_HF_NAME & 
+    bash benchmarks/utils/vllm_serve_ngrok.sh $MODEL_HF_NAME $NGROK_ACCOUNT_ID $HOME_DIR & 
 
     echo "Waiting for vLLM server to start..."
     MAX_HEALTH_CHECK_ATTEMPTS=15
@@ -76,7 +79,7 @@ else
 
     echo "start running run_infer"
 
-    bash benchmarks/swebench/scripts/test_infer.sh $MODEL_NAME
+    bash benchmarks/swebench/scripts/test_infer.sh $MODEL_NAME $MAX_ITER
 fi
 
 python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1 
