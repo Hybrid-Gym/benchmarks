@@ -1,0 +1,8 @@
+# Models to evaluate on FULL SWE-bench_Verified, in queue order.
+# One HF repo id per line. Blank lines and '#' comments ignored.
+synthetic-code-training/qwen25-coder-7b-func-localize-claude45-1457i-multi-round-false250
+synthetic-code-training/qwen25-coder-7b-func-localize-claude45-1457i-multi-round-true250
+synthetic-code-training/qwen25-coder-7b-func-localize-claude45-1457i-read-narrow-false250
+synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-read-narrow-false338
+synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-multi-round-true338
+synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-multi-round-false338

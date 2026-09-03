@@ -1,6 +1,6 @@
 MODEL_HF_NAME="${1:-synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16}"
 NGROK_ACCOUNT_ID=${2:-1}
-STORAGE_DIR="${3:-/home/yiqingxi}"
+STORAGE_DIR="${3:-/home/gaokaiz}"
 
 MAX_MODEL_LEN=32768
 
@@ -9,7 +9,7 @@ MODEL_SAVE_NAME=${MODEL_SAVE_NAME//./}
 CHECKPOINT_DIR="$STORAGE_DIR/checkpoints/$MODEL_SAVE_NAME"
 CONFIG_FILE=".llm_config/${MODEL_SAVE_NAME}.json"
 
-NGROK_CONFIG_FILE=/home/yiqingxi/.config/ngrok/ngrok${NGROK_ACCOUNT_ID}.yml
+NGROK_CONFIG_FILE=/home/gaokaiz/.config/ngrok/ngrok${NGROK_ACCOUNT_ID}.yml
 
 if [ ! -d "$CHECKPOINT_DIR" ]; then
   echo "Downloading checkpoint $MODEL_HF_NAME to $CHECKPOINT_DIR ..."
