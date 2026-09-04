@@ -71,25 +71,28 @@ without re-deriving them.
 All are Qwen2.5-Coder-7B fine-tunes, served at 32k context, run with the
 OpenHands SDK at `max_iterations=60`, 24 workers, remote workspaces.
 
-## Status right now (2026-09-03 16:11)
+## Status right now (2026-09-03 22:05)
 
     qwen25-coder-7b-func-localize-claude45-1457i-multi-round-false250
-        COMPLETE 500/500, 158 non-empty patches  -> GRADE THIS ONE NOW
+        COMPLETE 500/500, complete=true, 158 non-empty patches
+        -> GRADE THIS ONE NOW
     qwen25-coder-7b-func-localize-claude45-1457i-multi-round-true250
-        IN PROGRESS 366/500, ETA ~18:00 today    -> partial on the Hub, do not grade yet
+        486/500, complete=false. The run finished its retry attempts (exit 0);
+        14 instances never completed because the remote runtime kept ending
+        their conversations with an error. They will be resumed in the next
+        allocation, after which this becomes complete=true.
+        -> DO NOT GRADE YET unless the user says to grade at 486
     qwen25-coder-7b-func-localize-claude45-1457i-read-narrow-false250
-        not started
+        IN PROGRESS 163/500, ETA ~02:50 tonight
+        -> partial on the Hub, do not grade
     qwen25-coder-7b-func-localize-claude47-1467i-read-narrow-false338
-        not started
+        not started; expected to fit in the current allocation
     qwen25-coder-7b-func-localize-claude47-1467i-multi-round-true338
-        not started
+        not started; needs a new allocation
     qwen25-coder-7b-func-localize-claude47-1467i-multi-round-false338
-        not started
+        not started; needs a new allocation
 
-The inference node's Slurm allocation ends **2026-09-04 11:29**, so
-`read-narrow-false250` and probably `claude47-1467i-read-narrow-false338` will
-land there; `claude47-1467i-multi-round-true338` and
-`claude47-1467i-multi-round-false338` need a new allocation the user will queue.
+The inference node's Slurm allocation ends 2026-09-04 11:29.
 
 ## What to do
 

@@ -1,0 +1,53 @@
+You grade SWE-bench_Verified predictions. Another machine (no docker) runs the
+inference and publishes to the Hub; you have local docker and run the harness.
+
+PREDICTIONS
+  Private HF dataset: synthetic-code-training/swebench-verified-results
+  Layout: <model>/predictions.jsonl and <model>/metadata.json
+  Ask the user for an HF token with read access to that org, then:
+    export HF_TOKEN=<token>
+    hf download synthetic-code-training/swebench-verified-results \
+        --repo-type dataset --local-dir ./swebench-results
+
+FORMAT
+  {"instance_id", "model_name_or_path", "model_patch", "resolved": null}
+  resolved is null = not yet graded. Fill it true/false per instance and push
+  the file back to the same path. Never drop the field. An empty model_patch
+  is legitimate (model made no edit) and grades false.
+
+BEFORE GRADING
+  Check metadata.json. Grade only complete: true. complete: false means a
+  partial snapshot of a run still going (the inference side uploads every
+  30 min so preemption loses nothing) and will be overwritten with more rows.
+
+GRADE
+  python -m swebench.harness.run_evaluation \
+      --dataset_name princeton-nlp/SWE-bench_Verified \
+      --predictions_path <model>/predictions.jsonl \
+      --max_workers 8 --run_id <model>
+  Merge the report's resolved_ids back into predictions.jsonl (true if present,
+  else false), re-upload to the same path, and add <model>/eval_report.json
+  with the resolve rate and the harness run id.
+
+THE 6 MODELS (Qwen2.5-Coder-7B func-localize fine-tunes, 500 instances each)
+  1 qwen25-coder-7b-func-localize-claude45-1457i-multi-round-false250
+  2 qwen25-coder-7b-func-localize-claude45-1457i-multi-round-true250
+  3 qwen25-coder-7b-func-localize-claude45-1457i-read-narrow-false250
+  4 qwen25-coder-7b-func-localize-claude47-1467i-read-narrow-false338
+  5 qwen25-coder-7b-func-localize-claude47-1467i-multi-round-true338
+  6 qwen25-coder-7b-func-localize-claude47-1467i-multi-round-false338
+
+WHAT TO DO
+  Grade every model that is currently complete: true, starting with model 1.
+  Then STOP. Do not poll or grade the rest on your own -- the user will tell
+  you when more are ready. Report per model: resolve rate out of 500, number
+  of empty patches, and anything that failed to build or apply.
+
+ONE CAVEAT
+  Empty patches are common and vary by model: model 1 has 158/500 (31.6%)
+  non-empty, but only 102/500 (20.4%) touch real source. That is genuine model
+  behaviour, not a harness bug. The difference is a pyproject.toml setuptools
+  pin that SWE-bench's own environment setup writes in -- an environment
+  artifact, not model output, which alone cannot resolve an instance. It was
+  left unfiltered so results are not altered; be aware of it if you inspect
+  patches by hand.
