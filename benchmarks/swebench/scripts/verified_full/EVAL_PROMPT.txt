@@ -20,6 +20,13 @@ BEFORE GRADING
   partial snapshot of a run still going (the inference side uploads every
   30 min so preemption loses nothing) and will be overwritten with more rows.
 
+  If metadata has missing_instances, those instance ids never produced a
+  result: the remote runtime killed their conversations on every attempt.
+  They are padded into predictions.jsonl with an empty patch and
+  inference_failed: true, so the file still covers all 500 and models stay
+  comparable. They are infrastructure failures, not model output, and will
+  grade as unresolved. Report them separately from genuine empty patches.
+
 GRADE
   python -m swebench.harness.run_evaluation \
       --dataset_name princeton-nlp/SWE-bench_Verified \
@@ -38,7 +45,9 @@ THE 6 MODELS (Qwen2.5-Coder-7B func-localize fine-tunes, 500 instances each)
   6 qwen25-coder-7b-func-localize-claude47-1467i-multi-round-false338
 
 WHAT TO DO
-  Grade every model that is currently complete: true, starting with model 1.
+  Models 1 and 2 are both complete: true and ready -- grade them now.
+  (Model 2 has 4 missing_instances; see above.)  Grade any other model that
+  is complete: true.
   Then STOP. Do not poll or grade the rest on your own -- the user will tell
   you when more are ready. Report per model: resolve rate out of 500, number
   of empty patches, and anything that failed to build or apply.

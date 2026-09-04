@@ -26,6 +26,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 TOKEN_PATH = Path.home() / ".config" / "hf" / "token_gaokai"
@@ -95,6 +96,33 @@ def build_predictions(out_jsonl: Path, model: str) -> list[dict]:
     return [by_id[k] for k in sorted(by_id)]
 
 
+def pad_missing(preds: list[dict], model: str) -> list[str]:
+    """Add empty-patch rows for instances that never produced a result.
+
+    Keeps the denominator at 500 so models stay comparable, while marking the
+    rows so a reader can tell an infrastructure failure from a model that
+    genuinely chose not to edit anything.
+    """
+    from datasets import load_dataset
+
+    have = {p["instance_id"] for p in preds}
+    # load_dataset's return type is a union; with an explicit split it is a
+    # Dataset of rows, which pyright cannot narrow on its own.
+    ds: Any = load_dataset(DATASET, split=SPLIT)
+    missing = [str(r["instance_id"]) for r in ds if r["instance_id"] not in have]
+    for iid in missing:
+        preds.append(
+            {
+                "instance_id": iid,
+                "model_name_or_path": model,
+                "model_patch": "",
+                "resolved": None,
+                "inference_failed": True,
+            }
+        )
+    return missing
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("model", help="model save name (basename, no org prefix)")
@@ -110,6 +138,15 @@ def main() -> None:
         help="upload even if fewer than 500 instances are present",
     )
     ap.add_argument("--public", action="store_true", help="create the repo public")
+    ap.add_argument(
+        "--final",
+        action="store_true",
+        help=(
+            "publish a run that will not get any more instances: pad the "
+            "missing ones with empty patches so the file covers all 500, and "
+            "record which instances never produced a result"
+        ),
+    )
     args = ap.parse_args()
 
     from huggingface_hub import HfApi
@@ -122,6 +159,12 @@ def main() -> None:
         sys.exit(f"no output.jsonl at {out_jsonl}")
 
     preds = build_predictions(out_jsonl, args.model)
+    inferred = len(preds)
+    missing: list[str] = []
+    if args.final:
+        missing = pad_missing(preds, args.model)
+        preds.sort(key=lambda r: r["instance_id"])
+        print(f"final:      padded {len(missing)} instance(s) that never ran")
     n = len(preds)
     n_patched = sum(1 for p in preds if p["model_patch"].strip())
     print(f"model:      {args.model}")
@@ -133,6 +176,9 @@ def main() -> None:
 
     meta = {
         "model": args.model,
+        "instances_inferred": inferred,
+        "inference_incomplete": bool(missing),
+        "missing_instances": missing,
         "dataset": DATASET,
         "split": SPLIT,
         "instances": n,
@@ -147,6 +193,16 @@ def main() -> None:
             "resolved is null for every record until an evaluation machine "
             "with docker runs the SWE-bench harness and fills it in."
         ),
+        "final_note": (
+            "This run is final. The instances in missing_instances never "
+            "produced a result -- the remote runtime ended their conversations "
+            "with an error on every attempt -- so they carry an empty patch and "
+            "inference_failed=true. They are infrastructure failures, not model "
+            "output. They are included so the denominator stays 500 and models "
+            "remain comparable; they will grade as unresolved."
+        )
+        if missing
+        else None,
     }
 
     api = HfApi(token=token)

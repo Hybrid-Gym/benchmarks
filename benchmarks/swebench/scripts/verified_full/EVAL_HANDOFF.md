@@ -71,28 +71,24 @@ without re-deriving them.
 All are Qwen2.5-Coder-7B fine-tunes, served at 32k context, run with the
 OpenHands SDK at `max_iterations=60`, 24 workers, remote workspaces.
 
-## Status right now (2026-09-03 22:05)
+## Status right now (2026-09-03 23:00)
 
     qwen25-coder-7b-func-localize-claude45-1457i-multi-round-false250
-        COMPLETE 500/500, complete=true, 158 non-empty patches
-        -> GRADE THIS ONE NOW
+        500/500, complete=true, 158 non-empty  -> GRADE
     qwen25-coder-7b-func-localize-claude45-1457i-multi-round-true250
-        486/500, complete=false. The run finished its retry attempts (exit 0);
-        14 instances never completed because the remote runtime kept ending
-        their conversations with an error. They will be resumed in the next
-        allocation, after which this becomes complete=true.
-        -> DO NOT GRADE YET unless the user says to grade at 486
+        500/500, complete=true, 194 non-empty  -> GRADE
+        4 instances (django-13121, django-13315, sphinx-7757, sympy-24661)
+        never ran: the remote runtime ended their conversations with an error
+        on all 8 attempts across two runs. They are padded with empty patches
+        and inference_failed=true so the denominator stays 500.
     qwen25-coder-7b-func-localize-claude45-1457i-read-narrow-false250
-        IN PROGRESS 163/500, ETA ~02:50 tonight
-        -> partial on the Hub, do not grade
+        in progress, ~212/500 -> do not grade
     qwen25-coder-7b-func-localize-claude47-1467i-read-narrow-false338
-        not started; expected to fit in the current allocation
+        in progress on the second allocation
     qwen25-coder-7b-func-localize-claude47-1467i-multi-round-true338
-        not started; needs a new allocation
+        queued on the second allocation
     qwen25-coder-7b-func-localize-claude47-1467i-multi-round-false338
-        not started; needs a new allocation
-
-The inference node's Slurm allocation ends 2026-09-04 11:29.
+        queued on the second allocation
 
 ## What to do
 
