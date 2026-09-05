@@ -224,3 +224,11 @@ config.toml
 
 # sdist/egg build detritus from a stray `pip install .`
 unknown-0.0.0/
+
+# swebench-grade local working data (source of truth lives on HF)
+swebench-results/
+
+# swebench.harness.run_evaluation ignores --report_dir for its own report file
+# and always writes <model>.<run_id>.json to cwd
+/*.json
+!/pyrightconfig.json
