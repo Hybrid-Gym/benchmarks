@@ -1,10 +1,10 @@
 #!/bin/bash
 
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --gres=gpu:A6000:1
 #SBATCH --job-name=agent
-#SBATCH --partition=preempt
-#SBATCH --qos=preempt_qos
+#SBATCH --partition=general
+#SBATCH --qos=normal
 #SBATCH --output=/home/yiqingxi/tmp/eval%A.out
 #SBATCH --mail-user=yiqingxi@andrew.cmu.edu
 #SBATCH --mail-type=END,FAIL
@@ -29,6 +29,7 @@ nvidia-smi -q -d PAGE_RETIREMENT
 
 OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/${MODEL_NAME}_sdk_${SDK_SHORT_SHA}_maxiter_${MAX_ITER} 
 REPORT_FILE=$OUTPUT_DIR/output.report.json
+OUTPUT_FILE=$OUTPUT_DIR/output.jsonl
 
 check_model_served() {
     uv run python -c "
@@ -45,8 +46,8 @@ source $HOME_DIR/home_conda_setup.sh openhands
 cd $HOME_DIR/benchmarks
 export PYTHONPATH=`pwd`
 
-if [ -f "$REPORT_FILE" ] && [ $(wc -l < "$REPORT_FILE") -gt 47 ]; then
-    echo "Report file exists and has more than 47 lines"
+if [ -f "$REPORT_FILE" ] && [ -f "$OUTPUT_FILE" ] && [ $(wc -l < "$OUTPUT_FILE") -gt 495 ]; then
+    echo "Report file exists and has more than 495 lines"
     echo "Skipping evaluation block..."
 else
     echo "Running evaluation block..."
@@ -79,12 +80,12 @@ else
 
     echo "start running run_infer"
 
-    bash benchmarks/swebench/scripts/test_infer.sh $MODEL_NAME $MAX_ITER
+    bash benchmarks/swebench/scripts/infer_all.sh $MODEL_NAME $MAX_ITER
 fi
 
-python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1 
+python benchmarks/swebench/extra_eval.py --split all --input_file $OUTPUT_DIR/output.jsonl --total_num -1 
 
-if [ -f "$REPORT_FILE" ] && [ $(wc -l < "$REPORT_FILE") -gt 47 ]; then
+if [ -f "$REPORT_FILE" ] && [ -f "$OUTPUT_FILE" ] && [ $(wc -l < "$OUTPUT_FILE") -gt 495 ]; then
     # remove ckpt
     MODEL_SAVE_NAME=$(basename $MODEL_HF_NAME)
     CHECKPOINT_DIR="$HOME_DIR/checkpoints/$MODEL_SAVE_NAME"
@@ -93,6 +94,6 @@ if [ -f "$REPORT_FILE" ] && [ $(wc -l < "$REPORT_FILE") -gt 47 ]; then
 
     echo "Completed!"
 else
-    echo "ERROR: Report file does not exist or has less than 47 lines"
+    echo "ERROR: Report file does not exist or has less than 495 lines"
     echo "Exiting script..."
 fi

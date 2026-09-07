@@ -9,9 +9,10 @@ export OPENHANDS_EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export RUNTIME_API_KEY=$REMOTE_KEY
 
+OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/${MODEL_NAME}_sdk_${SDK_SHORT_SHA}_maxiter_${MAX_ITER}
+
 uv run swebench-infer .llm_config/${CONFIG_NAME}.json \
     --dataset princeton-nlp/SWE-bench_Verified \
-    --select benchmarks/swebench/easy50_instances.txt \
     --split test \
     --workspace remote \
     --num-workers 16 \
@@ -20,9 +21,6 @@ uv run swebench-infer .llm_config/${CONFIG_NAME}.json \
     --output-dir $STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs
 
 #     # --n-limit 1
-
-OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/princeton-nlp__SWE-bench_Verified-test/openai/${MODEL_NAME}_sdk_${SDK_SHORT_SHA}_maxiter_${MAX_ITER}
-
 # uv run swebench-eval $OUTPUT_DIR/output.jsonl --run-id init --modal
 
 export OGMA_STORAGE_DIR="/projects/ogma3/yiqingxi"
@@ -51,6 +49,6 @@ for attempt in $(seq 1 $MAX_ATTEMPTS); do
     fi
 done
 
-python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
+python benchmarks/swebench/extra_eval.py --split all --input_file $OUTPUT_DIR/output.jsonl --total_num -1
 
 uv run python benchmarks/utils/post_process_scripts/combine_completions.py $OUTPUT_DIR/output.jsonl
