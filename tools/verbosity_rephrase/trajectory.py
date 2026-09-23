@@ -15,6 +15,9 @@ flattened into consecutive assistant turns followed by as many user turns, paire
 Two irregular shapes are kept verbatim as the call part: malformed calls (`<tool_call>{json}`
 from qwen, `<invoke ...>` from claude, each answered by a "Please continue working..." nudge)
 and the few pure-text turns that have no call at all.
+
+`think` and `task_tracker` turns (the agent's thinking/planning steps) are never rephrased: a
+skeleton either drops them together with their result turns or keeps them verbatim.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ MALFORMED_START = re.compile(
     r"(<tool_call>|</tool_call>|<invoke\b|<function_calls>|^\{\"name\": \")",
     re.MULTILINE,
 )
-DROP_TOOLS = frozenset({"think", "task_tracker"})
+THINK_TOOLS = frozenset({"think", "task_tracker"})
 
 
 @dataclass
@@ -47,7 +50,7 @@ class Turn:
 
 @dataclass
 class Skeleton:
-    """A trajectory with think/task_tracker turns removed and every kept assistant turn split."""
+    """A trajectory with its think/task_tracker turns dropped or kept verbatim and every other assistant turn split."""
 
     messages: list[dict]
     keep: list[int]  # surviving indices into `messages`, in order
@@ -56,7 +59,7 @@ class Skeleton:
     )  # kept assistant turns by msg_idx
     dropped: list[int] = field(
         default_factory=list
-    )  # msg_idx of the dropped assistant turns
+    )  # msg_idx of the dropped think turns (empty when they are kept)
 
 
 def split_content(content: str) -> tuple[str, str, str | None, str]:
@@ -100,7 +103,7 @@ def pair_results(messages: list[dict]) -> dict[int, int | None]:
     return pairs
 
 
-def build_skeleton(messages: list[dict]) -> Skeleton:
+def build_skeleton(messages: list[dict], keep_think: bool = False) -> Skeleton:
     pairs = pair_results(messages)
     turns: dict[int, Turn] = {}
     dropped: list[int] = []
@@ -110,9 +113,10 @@ def build_skeleton(messages: list[dict]) -> Skeleton:
             continue
         text, call, tool, kind = split_content(m["content"])
         res = pairs.get(idx)
-        if tool in DROP_TOOLS:
-            dropped.append(idx)
-            drop.update(i for i in (idx, res) if i is not None)
+        if tool in THINK_TOOLS:
+            if not keep_think:
+                dropped.append(idx)
+                drop.update(i for i in (idx, res) if i is not None)
             continue
         turns[idx] = Turn(idx, text, call, tool, res, kind)
     keep = [i for i in range(len(messages)) if i not in drop]
@@ -130,9 +134,9 @@ def render(text: str, call: str) -> str:
 
 
 def assemble(sk: Skeleton, texts: dict[int, str]) -> list[dict]:
-    """Rebuild `messages` with each kept assistant turn's text part replaced by `texts[msg_idx]`.
+    """Rebuild `messages` with each split assistant turn's text part replaced by `texts[msg_idx]`.
 
-    Turns absent from `texts` keep their original bytes. A pure-text turn keeps its content
+    Turns absent from `texts` (kept think turns included) keep their original bytes. A pure-text turn keeps its content
     when the new text is empty, since an empty assistant turn cannot be trained on.
     """
     out: list[dict] = []

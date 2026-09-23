@@ -2,10 +2,20 @@
 
 Builds the **verbosity ablation** datasets: the same trajectories with the agent's prose (the
 natural-language part of each assistant turn, outside the tool call) removed or rewritten to a
-controlled length, so training can be compared across 0 / ~20 / ~50 / ~100 / ~300 tokens of
-prose per turn.
+controlled length. Two families:
 
-Design (Slack thread with Yiqing, 2026-09-20):
+| family | variants | think / task_tracker turns | prose per turn |
+|---|---|---|---|
+| A `fixed` | `_text0`, `_text20`, `_text50`, `_text100`, `_text300` | removed, with their result turns | none, or ~20 / 50 / 100 / 300 tokens for every turn |
+| B `scaled` | `_text0x`, `_text0.5x`, `_text2x`, `_text4x`, `_text8x` | kept verbatim | none, or ½ / 2 / 4 / 8 × the turn's **own** prose length |
+
+Sources: `synthetic-code-training/func_localize_claude45_1457i` and
+`synthetic-code-training/r2egym_qwen3next80b_1500i`; outputs are `<base>_<variant>` in the same
+org with the sibling-variant schema (`instance_id`, `resolved`, `messages`).
+
+## Design
+
+Family A (Slack thread with Yiqing, 2026-09-20):
 
 1. Strip every assistant turn down to its tool call and remove `think` / `task_tracker` turns
    (with their result turns) entirely, so trajectories contain nothing but real tool calls.
@@ -18,21 +28,38 @@ Design (Slack thread with Yiqing, 2026-09-20):
    tokenizer the students use); a version outside its band is re-requested with the measured
    count as feedback, at most 3 rounds, and if it still misses the turn keeps its original prose.
 
-Sources: `synthetic-code-training/func_localize_claude45_1457i` and
-`synthetic-code-training/r2egym_qwen3next80b_1500i`. Outputs: `<base>_text0`, `_text20`,
-`_text50`, `_text100`, `_text300` in the same org, with the sibling-variant schema
-(`instance_id`, `resolved`, `messages`).
+Family B (2026-09-22): same machinery, two changes, plus `text0x` (2026-09-23, Yiqing: "remove all text but
+keep the thinking/planning steps, unlike text0"): every non-think turn is its tool call only, think /
+task_tracker turns kept verbatim, no LLM involved.
+
+1. The thinking/planning steps stay: `think` / `task_tracker` turns and their results are kept
+   byte-for-byte (623 claude45 think turns carry a one-line lead-in before the call; it stays
+   with the step). They are never rephrased.
+2. Every other turn's targets are multiples of its own prose length in Qwen3 tokens: ½×, 2×,
+   4× and 8×, written in one request as a ladder (½× shortens the original; 2× elaborates it;
+   4× elaborates the 2×; 8× elaborates the 4×), same ±25 % band, ≤3 rounds with the original
+   as the retry source, original prose on a miss. Condensing from the longest version, as
+   family A does, collapsed on long turns (2× of a 300-token turn came back at 140–450 tokens).
+   The word ask is inflated for targets above 300 tokens (`LONG_ASK`: ×1.6 at 600, ×2.0 at
+   1 000, ×2.6 at 2 000): the first 2 000 turns of the run showed the model writing a median
+   97 % of a 150–300-token ask but 68 % of 300–600, 44 % of 600–1 000 and 35 % beyond, and
+   with the inflation 13 of 18 probe versions above 600 tokens landed in band instead of 6. A multiple is **not
+   requested** when its target is under 4 tokens (halving a 6-token turn) or over 2 000 tokens:
+   the model stops well short of anything longer however it is asked (a 3 600-token target got
+   700–1 400 tokens across three rounds, whether asked alone, with feedback, or by doubling a
+   2× version), so such turns keep their original prose and are counted on the card. Empty
+   turns stay empty in every variant (0 × n = 0); in claude45 that is 60 % of turns.
 
 ## Files
 
 | file | role |
 |---|---|
-| `trajectory.py` | split a turn into prose / call / tool name; positional call↔result pairing; skeleton (think/task_tracker removed); reassembly |
+| `trajectory.py` | split a turn into prose / call / tool name; positional call↔result pairing; skeleton (think turns dropped or kept verbatim); reassembly |
 | `tokens.py` | token counting with `Qwen/Qwen3-8B` (same vocabulary as Qwen2.5-Coder) |
-| `llm.py` | the prompts (first round + retry), reply parsing, gateway client with backoff |
-| `rephrase.py` | the LLM driver: one work unit per kept assistant turn, resumable jsonl output |
-| `build_variants.py` | assemble the five variants, validate, save to disk, push with a dataset card |
-| `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, re-entrant |
+| `llm.py` | the two length specs, the prompts (first round + retry), reply parsing, gateway client with backoff |
+| `rephrase.py` | the LLM driver: one work unit per non-think assistant turn, per-request `max_tokens`, resumable jsonl output |
+| `build_variants.py` | assemble a family's variants, validate, save to disk, push with a dataset card |
+| `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, `FAMILY=fixed|scaled`, re-entrant |
 
 ## Data facts that shaped the code
 
@@ -40,11 +67,12 @@ Sources: `synthetic-code-training/func_localize_claude45_1457i` and
   call per turn and never prose after the block. Parallel calls are consecutive assistant turns
   followed by the same number of `EXECUTION RESULT` user turns, paired positionally, which is
   what lets a `think` turn take its "Your thought has been logged." result with it.
-- `func_localize_claude45_1457i`: 30 615 assistant turns, 3 738 `think` + 683 `task_tracker`
-  dropped, 26 194 kept, of which 15 681 have **no prose at all**. Hence the "explain the tool
+- `func_localize_claude45_1457i`: 30 615 assistant turns, 3 738 `think` + 683 `task_tracker`,
+  26 194 others, of which 15 681 have **no prose at all**. Hence family A's "explain the tool
   call when TEXT is empty" rule; otherwise the 20-token variant would average ~8 tokens per
-  turn. `r2egym_qwen3next80b_1500i`: 30 501 turns, 8 `think`, 30 493 kept, 85 without prose;
-  prose is long-tailed (p99 ≈ 545 tokens).
+  turn. `r2egym_qwen3next80b_1500i`: 30 501 turns, 8 `think`, 30 493 others, 85 without prose;
+  prose is long-tailed (p90 ≈ 230, p99 ≈ 545, max 5 070 tokens), which is what the family-B
+  cap is about: 8× is out of reach for 2 660 r2egym turns (8.7 %) and 73 claude45 turns.
 - Malformed calls (4 claude `<invoke>` finishes; 304 garbled qwen `<tool_call>` JSON, each
   answered by a "Please continue working…" nudge) are kept verbatim as the call part and their
   prose is treated like any other. Five r2egym turns are pure prose with no call; they keep
@@ -67,7 +95,8 @@ What the final prompt adds over the first one:
   sentences" / "three sentences" / "one sentence of about 22 words"). A bare word target,
   even inflated 35 %, left every length 15–20 % short; structure + floor doubled round-1 hits
   on the hardest turns (claude45 turns with no prose: t300 8/24 → 17/24, t50 11/24 → 23/24,
-  t20 10/24 → 22/24);
+  t20 10/24 → 22/24). Family B derives the same kind of structure from the target
+  (`shape_of` / `struct_of` in `llm.py`);
 - for turns with no prose, an instruction to walk through the call's file / range / pattern /
   command and the expected output;
 - retries at temperature 0.7 that quote the attempt's own word and token counts and ask for
@@ -76,7 +105,12 @@ What the final prompt adds over the first one:
 - over-band candidates trimmed at a sentence boundary as they arrive;
 - lenient JSON extraction (unescaped quotes inside values broke a third of retries).
 
-## Results (2026-09-21, 6 workers, free)
+The family-A datasets were produced by the tool at commit `c42f8a9`; the prompt has since
+been parameterized for family B and differs, for family A, by one space in the example JSON.
+
+## Results
+
+Family A (2026-09-21, 6 workers, free):
 
 | dataset | kept turns | turns that kept original prose | mean tokens t20 / t50 / t100 / t300 | calls/turn | LLM tokens in / out | wall time |
 |---|---|---|---|---|---|---|
@@ -89,22 +123,40 @@ call-only in `_text300`. All ten datasets were re-validated fresh from HF: row c
 three-column schema, every tool call and every non-assistant turn byte-identical to the base,
 no `think` / `task_tracker` left, `text0` prose-free (except r2egym's five pure-text turns).
 
+Family B (2026-09-22/23, 6 workers, free; "rephrased" = turns with a requested multiple):
+
+| dataset | turns / rephrased | not requested (empty, over cap) | fallback ½× / 2× / 4× / 8× | mean ratio ½× / 2× / 4× / 8× | calls/rephrased turn | LLM tokens in / out | wall time |
+|---|---|---|---|---|---|---|---|
+| claude45 | 26 194 / 10 513 | 15 681 empty; 8× over cap 73, 4× 17, 2× 3 | 0.8 % / 1.2 % / 2.8 % / 3.4 % | 0.52 / 1.93 / 3.92 / 8.14 | 1.85 | 20.9M / 10.1M | 5.3 h |
+| r2egym | 30 493 / 30 400 | 85 empty; 8× over cap 2 652, 4× 369, 2× 89; ½× under floor 250 | 0.6 % / 2.5 % / 5.0 % / 4.1 % | 0.52 / 1.91 / 3.87 / 8.05 | 1.98 | 72.0M / 46.1M | 19.1 h |
+
+`_text0x` (no LLM): claude45 26 194 call-only turns + 4 421 think/task_tracker turns kept; r2egym 30 488
+call-only turns + 5 pure-text turns keeping their text + 8 think turns kept. Both pushed and validated
+2026-09-23.
+
+The 8× fallback is a function of the original length (claude45 / r2egym): 0 % / 0 % for turns of
+≤30 tokens, 3 % / 2 % for 31–80, 21 % / 12 % for 81–150 and 44 % / 37 % for 151–250 (targets of
+1 200–2 000 tokens); 4× behaves the same one octave up (r2egym: 1 % below 80 tokens, 19 % for
+81–250, 26 % for 251–500). Such turns keep their original prose. Turns accepted after one / two /
+three rounds: 30 / 55 / 15 % (claude45), 22 / 58 / 20 % (r2egym); 0 API errors in either run. The
+r2egym run sat at the gateway's ~96K tokens/min the whole time.
+
 ## Usage
 
 ```bash
 # everything, in tmux (re-entrant; resumes the jsonl outputs)
-tmux new -d -s verbosity 'bash tools/verbosity_rephrase/run_pipeline.sh'
+tmux new -d -s verbosity 'FAMILY=scaled bash tools/verbosity_rephrase/run_pipeline.sh'
 
 # pieces
-.venv/bin/python tools/verbosity_rephrase/rephrase.py --hf synthetic-code-training/func_localize_claude45_1457i \
+.venv/bin/python tools/verbosity_rephrase/rephrase.py --family scaled --hf synthetic-code-training/func_localize_claude45_1457i \
     --out-dir eval_outputs/verbosity_rephrase --model nvidia/deepseek-ai/deepseek-v4-flash --workers 6
-.venv/bin/python tools/verbosity_rephrase/build_variants.py --hf synthetic-code-training/func_localize_claude45_1457i \
-    --rephrase eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.rephrase.jsonl \
+.venv/bin/python tools/verbosity_rephrase/build_variants.py --family scaled --hf synthetic-code-training/func_localize_claude45_1457i \
+    --rephrase eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.scaled.jsonl \
     --out-dir eval_outputs/verbosity_rephrase/variants --push
 ```
 
 The API key is read from `LLM_API_KEY` or, failing that, `config.toml`
 (`[llm.nvidia_claude_opus47].api_key`); it is never printed. Keep total workers at ~6–8: the
 gateway caps each model at 100 RPM / 100K TPM and throttles the whole box by source IP; the
-run above sat at ~85K tokens/min and absorbed the resulting 429 bursts through the client's
+family-A run sat at ~85K tokens/min and absorbed the resulting 429 bursts through the client's
 backoff.

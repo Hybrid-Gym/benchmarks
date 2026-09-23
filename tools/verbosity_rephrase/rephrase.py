@@ -1,19 +1,24 @@
-"""Rephrase every kept assistant turn of a trajectory dataset at four text lengths.
+"""Rephrase every non-think assistant turn of a trajectory dataset at several text lengths.
 
-Each row is reduced to its skeleton (think / task_tracker turns and their results dropped, see
-trajectory.py) and every remaining assistant turn becomes one work unit. One request asks for
-the prose at ~300 / ~100 / ~50 / ~20 student-model tokens (llm.py); versions outside the ±25 %
-band are re-requested with the measured count as feedback, for at most --max-rounds rounds.
-A version still outside the band after that falls back to the turn's original text.
+Each row is reduced to its skeleton (trajectory.py) and every assistant turn other than think /
+task_tracker becomes one work unit. One request asks for all versions of a family (llm.py):
+  --family fixed    ~300 / ~100 / ~50 / ~20 student-model tokens
+  --family scaled   0.5x / 2x / 4x / 8x of the turn's own prose length (multiples whose target
+                    is under 4 or over 2000 tokens, and every multiple of an empty turn, are not
+                    requested)
+Versions outside the ±25 % band are re-requested with the measured count as feedback, for at
+most --max-rounds rounds. A version still outside the band after that falls back to the
+turn's original text.
 
-Output: <out-dir>/<dataset>.rephrase.jsonl, one line per unit:
-  {"instance_id", "msg_idx", "tool", "orig_text", "orig_tokens", "rounds",
-   "versions": {"t300": {"text", "tokens", "ok", "round"}, ...},  # ok=False: fell back to orig_text
-   "fallback": [keys that fell back], "usage", "rounds_log", "elapsed", "model", "error"?}
+Output: <out-dir>/<dataset>.<family>.jsonl, one line per unit:
+  {"instance_id", "msg_idx", "tool", "orig_text", "orig_tokens", "family", "targets", "rounds",
+   "versions": {key: {"text", "tokens", "ok", "round"}, ...},  # ok=False: fell back to orig_text
+   "fallback": [keys that fell back], "skipped": [keys not requested],
+   "usage", "rounds_log", "elapsed", "model", "error"?}
 Units already present without "error" are skipped on restart, so a killed run resumes.
 
 Usage:
-  python tools/verbosity_rephrase/rephrase.py \
+  python tools/verbosity_rephrase/rephrase.py --family scaled \
       --hf synthetic-code-training/func_localize_claude45_1457i \
       --out-dir eval_outputs/verbosity_rephrase --model nvidia/deepseek-ai/deepseek-v4-flash --workers 6
 """
@@ -35,8 +40,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import (
     DEFAULT_TOLERANCE,
-    KEY_ORDER,
+    SPECS,
     Rephraser,
+    Spec,
     band,
     first_round_messages,
     parse_versions,
@@ -47,6 +53,7 @@ from trajectory import build_skeleton  # noqa: E402
 
 
 RETRY_TEMPERATURE = 0.7  # warmer than round 1 so the two retry candidates differ
+OUTPUT_HEADROOM = 2.0  # max_tokens per request = this x the tokens asked for + overhead
 _SENT_END = re.compile(r"(?<=[.!?:])\s+")
 
 
@@ -88,20 +95,16 @@ def trim_to_band(text: str, lo: int, hi: int) -> str | None:
     return None
 
 
-def _source(text: str, versions: dict[str, dict]) -> str:
-    """What a retry condenses or expands: the accepted t300, else the original prose, else the best t300 attempt."""
-    v = versions.get("t300")
-    if v and v["ok"]:
-        return v["text"]
-    return text or (v["text"] if v else "(no usable source - write from the TOOL CALL)")
-
-
-def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -> dict:
+def process_unit(
+    rp: Rephraser, spec: Spec, unit: dict, max_rounds: int, tolerance: float
+) -> dict:
     t0 = time.time()
     text, call = unit["text"], unit["call"]
+    orig_tokens = count_tokens(text)
+    targets = spec.targets(orig_tokens)
     versions: dict[str, dict] = {}  # best attempt per key so far
     failing: dict[str, tuple[int, int]] = {
-        k: (0, 0) for k in KEY_ORDER
+        k: (0, 0) for k in targets
     }  # key -> (tokens, words) of that attempt
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
     rounds_log: list[dict] = []
@@ -111,18 +114,27 @@ def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -
         if not failing:
             break
         rounds = rnd
-        base_keys = [k for k in KEY_ORDER if k in failing]
+        base_keys = [k for k in targets if k in failing]
         if rnd == 1:
-            msgs = first_round_messages(text, call, tolerance)
+            msgs = first_round_messages(spec, targets, text, call, tolerance)
             keys = base_keys
         else:
             msgs = retry_messages(
-                text, call, _source(text, versions), failing, tolerance
+                spec,
+                targets,
+                text,
+                call,
+                spec.source(text, versions),
+                failing,
+                tolerance,
             )
             keys = [f"{k}_{c}" for k in base_keys for c in "ab"]
+        asked = sum(targets[k] for k in base_keys) * (1 if rnd == 1 else 2)
         try:
             raw, usage = rp.complete(
-                msgs, temperature=None if rnd == 1 else RETRY_TEMPERATURE
+                msgs,
+                temperature=None if rnd == 1 else RETRY_TEMPERATURE,
+                max_tokens=max(rp.max_tokens, round(OUTPUT_HEADROOM * asked) + 300),
             )
         except Exception as e:  # noqa: BLE001
             err = f"api round {rnd}: {type(e).__name__}: {str(e)[:200]}"
@@ -131,6 +143,8 @@ def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -
         for k in ("prompt_tokens", "completion_tokens"):
             usage_total[k] += usage.get(k) or 0
         got = parse_versions(raw, keys)
+        if usage.get("finish_reason") == "length" and got:
+            got.popitem()  # the last value was cut off
         cand_tokens: dict[str, list[int]] = {}
         rounds_log.append(
             {
@@ -148,7 +162,7 @@ def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -
             if not cands:
                 failing[k] = (0, 0)
                 continue
-            lo, hi = band(k, tolerance)
+            lo, hi = band(targets[k], tolerance)
             mid = (lo + hi) / 2
             for v in cands:
                 n, trimmed = count_tokens(v), False
@@ -182,10 +196,13 @@ def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -
         "msg_idx": unit["msg_idx"],
         "tool": unit["tool"],
         "orig_text": text,
-        "orig_tokens": count_tokens(text),
+        "orig_tokens": orig_tokens,
+        "family": spec.name,
+        "targets": targets,
         "rounds": rounds,
         "versions": {},
         "fallback": [],
+        "skipped": [k for k in spec.keys if k not in targets],
         "usage": usage_total,
         "rounds_log": rounds_log,
         "elapsed": round(time.time() - t0, 2),
@@ -194,14 +211,14 @@ def process_unit(rp: Rephraser, unit: dict, max_rounds: int, tolerance: float) -
     if err:
         out["error"] = err
         return out
-    for k in KEY_ORDER:
+    for k in targets:
         v = versions.get(k)
         if v and v["ok"]:
             out["versions"][k] = v
         else:  # keep the original text; the best miss stays for inspection
             out["versions"][k] = {
                 "text": text,
-                "tokens": out["orig_tokens"],
+                "tokens": orig_tokens,
                 "ok": False,
                 "round": None,
                 "best_miss": v,
@@ -251,6 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--hf-split", default="train")
     p.add_argument("--out-dir", required=True)
+    p.add_argument("--family", choices=list(SPECS), default="fixed")
     p.add_argument(
         "--model",
         default=os.environ.get(
@@ -268,7 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
         help='JSON passed as extra_body, e.g. \'{"chat_template_kwargs":{"thinking":false}}\'',
     )
     p.add_argument("--temperature", type=float, default=0.3)
-    p.add_argument("--max-tokens", type=int, default=2500)
+    p.add_argument(
+        "--max-tokens",
+        type=int,
+        default=2500,
+        help="floor for the per-request max_tokens (raised for long targets)",
+    )
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--max-rounds", type=int, default=3)
     p.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE)
@@ -288,6 +311,7 @@ def main() -> None:
         sys.exit("error: no API key (--api-key / LLM_API_KEY / config.toml)")
     from datasets import load_dataset
 
+    spec = SPECS[args.family]
     rp = Rephraser(
         key,
         args.base_url,
@@ -300,7 +324,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for repo in args.hf:
         label = repo.split("/")[-1]
-        out_path = out_dir / f"{label}.rephrase.jsonl"
+        out_path = out_dir / f"{label}.{spec.name}.jsonl"
         if args.no_resume and out_path.exists():
             out_path.unlink()
         units = dataset_units(
@@ -313,17 +337,17 @@ def main() -> None:
         pending = [u for u in units if (u["instance_id"], u["msg_idx"]) not in done]
         print(
             f"\n{label}: {len(units)} turns, {len(done)} done, {len(pending)} pending "
-            f"(model={args.model}, workers={args.workers}, rounds<={args.max_rounds}, tol={args.tolerance})",
+            f"(family={spec.name}, model={args.model}, workers={args.workers}, rounds<={args.max_rounds}, tol={args.tolerance})",
             file=sys.stderr,
         )
-        n_ok = n_err = n_fb = 0
+        n_ok = n_err = n_fb = n_skip = 0
         t0 = time.time()
         with (
             out_path.open("a") as fh,
             concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as ex,
         ):
             futs = [
-                ex.submit(process_unit, rp, u, args.max_rounds, args.tolerance)
+                ex.submit(process_unit, rp, spec, u, args.max_rounds, args.tolerance)
                 for u in pending
             ]
             for i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
@@ -331,17 +355,18 @@ def main() -> None:
                 n_err += bool(res.get("error"))
                 n_ok += not res.get("error")
                 n_fb += bool(res["fallback"])
+                n_skip += not res["targets"]
                 fh.write(json.dumps(res, ensure_ascii=False) + "\n")
                 fh.flush()
                 if i % 50 == 0 or i == len(pending):
                     rate = i / max(time.time() - t0, 1e-6) * 60
                     print(
                         f"  {label} {i}/{len(pending)} ok={n_ok} err={n_err} with_fallback={n_fb} "
-                        f"{rate:.0f} turns/min eta={(len(pending) - i) / rate:.0f} min",
+                        f"all_skipped={n_skip} {rate:.0f} turns/min eta={(len(pending) - i) / rate:.0f} min",
                         file=sys.stderr,
                     )
         print(
-            f"Done {label}: ok={n_ok} err={n_err} with_fallback={n_fb} -> {out_path}",
+            f"Done {label}: ok={n_ok} err={n_err} with_fallback={n_fb} all_skipped={n_skip} -> {out_path}",
             file=sys.stderr,
         )
 
