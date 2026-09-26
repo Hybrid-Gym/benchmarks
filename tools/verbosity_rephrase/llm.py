@@ -10,6 +10,9 @@ Two length specs (families):
           (x0.5 shortens the prose; x2 elaborates it; x4 elaborates x2; x8 elaborates x4); a
           multiple whose target falls outside MIN_TARGET..MAX_TARGET (every multiple of an
           empty turn) is not requested
+          x32: written afterwards from the longest accepted rung (x8, else x4, x2, the prose) as
+          the SOURCE, in consecutive parts of at most PART_MAX tokens (each request sees the
+          text so far and writes the next part), capped at MAX_TARGET_PARTS
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import math
 import random
 import re
 import sys
+import threading
 import time
 
 from openai import OpenAI
@@ -30,9 +34,15 @@ Messages = list[ChatCompletionMessageParam]
 DEFAULT_TOLERANCE = 0.25  # 20 -> 15..25, 50 -> 38..62, 100 -> 75..125, 300 -> 225..375
 WORDS_PER_TOKEN = 0.75
 WORD_CALIBRATION = 1.35  # models undershoot a bare word target by 15-20 %; the token band stays the criterion
+PARTS_WORD_CALIBRATION = 0.9  # a part written on its own comes out 1.5x its chunk at 1.35 (smoke test, 26 parts)
 LONG_ASK = 0.6  # per doubling of the target above 300 tokens: the model writes a shrinking fraction of a long ask (~68 % at 300-600, ~44 % at 600-1000, ~35 % beyond)
 MIN_TARGET = 4  # tokens; halving a shorter turn is meaningless
 MAX_TARGET = 2000  # tokens; above this the model stops well short however it is asked
+MAX_TARGET_PARTS = 8000  # tokens; cap for versions written in parts (x32 of a 250-token turn, the same turns x8 reaches)
+PART_MAX = 1500  # tokens; longest part asked for in one request
+PARTS_STOP = 0.9  # stop adding parts once the text reaches this fraction of the target (the band is wider)
+MAX_SOFAR_CHARS = 8000  # the text so far is shown head + tail beyond this
+SOFAR_TAIL = 6000
 MAX_CALL_CHARS = 3500  # longer parts are shown head + tail
 MAX_TEXT_CHARS = 14000
 FORBIDDEN = (
@@ -45,22 +55,44 @@ FORBIDDEN = (
     "<invoke",
 )
 
-SYSTEM_PROMPT = """You rewrite the natural-language commentary that a software-engineering agent writes alongside a tool call, at controlled lengths.
+RULES = """- Preserve the meaning and intent of TEXT. Do not invent facts, findings, file contents, or results that TEXT and the TOOL CALL do not state or imply. Longer versions elaborate on the same intent (what I am looking for, why this step, how it relates to the task, what I expect to learn); they never add new steps or new discoveries. Shorter versions condense the same content.
+- If TEXT is empty, write what the agent would say just before this tool call: what the call does and why it helps, based only on the call itself. The call's `summary` parameter states the agent's own intent - use it as such, never refer to "the summary"; ignore the `security_risk` parameter entirely. For the longer versions, walk through the call concretely: which file, range, pattern or command it targets and what each part is for, what output I expect to see, and what I will do with it next.
+- Do not guess what the overall task is about (bug, feature, docstring, ...) unless TEXT says so; when elaborating, stay with what this step examines or changes and what that tells the agent, rather than inventing specifics about the task or the code.
+- Write in the agent's voice: first person, present tense, addressed to no one in particular (e.g. "Let me ...", "I'll ...", "Now I need to ..."). Keep the original tone, including openers like "Great!" or "I see the issue" when TEXT has them.
+- Plain prose only. No headings, no lists unless TEXT used them, no code blocks, no XML tags, no quotation of the tool call, no meta-language about "the tool call", "the message" or these instructions."""
+
+SYSTEM_PROMPT = (
+    """You rewrite the natural-language commentary that a software-engineering agent writes alongside a tool call, at controlled lengths.
 
 You are given ONE agent turn: its TEXT (the prose the agent wrote before the tool call; may be empty) and its TOOL CALL. Produce the prose for this turn at {n} target lengths.
 
 Rules:
-- Preserve the meaning and intent of TEXT. Do not invent facts, findings, file contents, or results that TEXT and the TOOL CALL do not state or imply. Longer versions elaborate on the same intent (what I am looking for, why this step, how it relates to the task, what I expect to learn); they never add new steps or new discoveries. Shorter versions condense the same content.
-- If TEXT is empty, write what the agent would say just before this tool call: what the call does and why it helps, based only on the call itself. The call's `summary` parameter states the agent's own intent - use it as such, never refer to "the summary"; ignore the `security_risk` parameter entirely. For the longer versions, walk through the call concretely: which file, range, pattern or command it targets and what each part is for, what output I expect to see, and what I will do with it next.
-- Do not guess what the overall task is about (bug, feature, docstring, ...) unless TEXT says so; when elaborating, stay with what this step examines or changes and what that tells the agent, rather than inventing specifics about the task or the code.
-- Write in the agent's voice: first person, present tense, addressed to no one in particular (e.g. "Let me ...", "I'll ...", "Now I need to ..."). Keep the original tone, including openers like "Great!" or "I see the issue" when TEXT has them.
-- Plain prose only. No headings, no lists unless TEXT used them, no code blocks, no XML tags, no quotation of the tool call, no meta-language about "the tool call", "the message" or these instructions.
+"""
+    + RULES
+    + """
 - {order}
 
 Length targets (1 token is about {wpt} words):
 {targets}
 
 Respond with ONLY a JSON object of the form {form}."""
+)
+
+PARTS_PROMPT = (
+    """You write the natural-language commentary that a software-engineering agent writes alongside a tool call, at a controlled length.
+
+You are given ONE agent turn: its TEXT (the prose the agent wrote before the tool call; may be empty) and its TOOL CALL{source_clause}. The commentary for this turn is to be {label} - far longer than TEXT - and is produced over one or more requests, each writing the next part; the parts are concatenated into one continuous text.
+
+Rules:
+"""
+    + RULES
+    + """
+- When WRITTEN SO FAR is given, continue seamlessly from its last sentence: do not restart, recap or repeat what it already says, and do not announce or number the part. Each part adds detail on aspects not yet covered - what this step examines, why now, what each element of the call is for, what I expect to see, how I will read it, what I will do next depending on what I find - always anchored in TEXT and the TOOL CALL.
+
+Length of this part (1 token is about {wpt} words): {struct}.
+
+Respond with ONLY a JSON object of the form {{"part": "..."}}."""
+)
 
 RETRY_INSTRUCTIONS = """Some versions were outside their length band. Rewrite ONLY the versions listed below, condensing or expanding the SOURCE text (keep its meaning; same rules as before). Each version gets two candidates of different lengths, written independently:
 
@@ -73,15 +105,23 @@ def band(tokens: int, tolerance: float) -> tuple[int, int]:
     return round(tokens * (1 - tolerance)), round(tokens * (1 + tolerance))
 
 
-def words_for(tokens: int) -> int:
+def words_for(tokens: int, parts: bool = False) -> int:
+    """The word count to ask for.
+
+    The ladder ask (four versions in one reply) is calibrated up and, above 300 tokens, inflated
+    by LONG_ASK. A part written on its own (`parts`) is neither: the model then writes more than
+    the words asked (1.3-2x the chunk with the ladder ask, 1.5x with the bare one).
+    """
+    if parts:
+        return round(tokens * WORDS_PER_TOKEN * PARTS_WORD_CALIBRATION)
     words = tokens * WORDS_PER_TOKEN * WORD_CALIBRATION
     if tokens > 300:
         words *= 1 + LONG_ASK * math.log2(tokens / 300)
     return round(words)
 
 
-def shape_of(tokens: int) -> str:
-    w = words_for(tokens)
+def shape_of(tokens: int, parts: bool = False) -> str:
+    w = words_for(tokens, parts)
     if w <= 12:
         return "one short sentence"
     if w <= 30:
@@ -96,9 +136,9 @@ def shape_of(tokens: int) -> str:
     return f"{k} paragraphs of about {round(w / k)} words each"
 
 
-def struct_of(tokens: int) -> str:
-    w = words_for(tokens)
-    return f"{shape_of(tokens)}, about {w} words in total (never fewer than {round(w * 0.85)} words)"
+def struct_of(tokens: int, parts: bool = False) -> str:
+    w = words_for(tokens, parts)
+    return f"{shape_of(tokens, parts)}, about {w} words in total (never fewer than {round(w * 0.85)} words)"
 
 
 class FixedLengths:
@@ -106,6 +146,8 @@ class FixedLengths:
 
     name = "fixed"
     keys = ("t300", "t100", "t50", "t20")
+    LADDER = keys  # all written in one reply
+    PARTS: tuple[str, ...] = ()
     TARGETS = {"t300": 300, "t100": 100, "t50": 50, "t20": 20}
     # Models follow a structure with a floor ("three paragraphs of about 110 words each, never
     # fewer than 280 words") far better than a bare word count; see the README.
@@ -124,6 +166,9 @@ class FixedLengths:
 
     def targets(self, orig_tokens: int) -> dict[str, int]:
         return dict(self.TARGETS)
+
+    def cap(self, key: str) -> int:
+        return MAX_TARGET
 
     def order_rule(self, keys: list[str]) -> str:
         return "Write t300 first, then condense it to t100, then t50, then t20."
@@ -151,16 +196,22 @@ class ScaledLengths:
     """Family B: multiples of the turn's own prose length, written as a ladder from short to long."""
 
     name = "scaled"
-    keys = ("x0.5", "x2", "x4", "x8")
-    MULT = {"x0.5": 0.5, "x2": 2, "x4": 4, "x8": 8}
+    keys = ("x0.5", "x2", "x4", "x8", "x32")
+    MULT = {"x0.5": 0.5, "x2": 2, "x4": 4, "x8": 8, "x32": 32}
+    LADDER = ("x0.5", "x2", "x4", "x8")  # one reply
+    PARTS = ("x32",)  # written afterwards, in parts, from the longest accepted rung
+    CAP = {"x32": MAX_TARGET_PARTS}
 
     def targets(self, orig_tokens: int) -> dict[str, int]:
         out = {}
         for k, m in self.MULT.items():
             t = round(m * orig_tokens)
-            if MIN_TARGET <= t <= MAX_TARGET:
+            if MIN_TARGET <= t <= self.cap(k):
                 out[k] = t
         return out
+
+    def cap(self, key: str) -> int:
+        return self.CAP.get(key, MAX_TARGET)
 
     def order_rule(self, keys: list[str]) -> str:
         parts = []
@@ -201,6 +252,16 @@ class ScaledLengths:
     def source(self, text: str, versions: dict[str, dict]) -> str:
         """Every multiple is anchored to the original prose, so retries expand or shorten it directly."""
         return text
+
+    def parts_source(
+        self, text: str, versions: dict[str, dict]
+    ) -> tuple[str | None, str]:
+        """(rung key, text) of the longest accepted ladder rung above 1x, else (None, the prose)."""
+        for k in ("x8", "x4", "x2"):
+            v = versions.get(k)
+            if v and v["ok"]:
+                return k, v["text"]
+        return None, text
 
 
 SPECS = {"fixed": FixedLengths(), "scaled": ScaledLengths()}
@@ -309,6 +370,62 @@ def retry_messages(
     ]
 
 
+def parts_messages(
+    spec: ScaledLengths,
+    key: str,
+    target: int,
+    orig_tokens: int,
+    text: str,
+    call: str,
+    source_key: str | None,
+    source: str,
+    sofar: str,
+    sofar_tokens: int,
+    chunk: int,
+    final: bool,
+    note: str = "",
+) -> Messages:
+    """One request of a version written in parts: the turn, the SOURCE rung (first part only), the text so far, and the ask for the next `chunk` tokens.
+
+    `note` is a sentence about the previous reply (why it was unusable, or that it came out short).
+    """
+    times = f"{spec.MULT[source_key]:g}-times" if source_key else ""
+    source_clause = (
+        f", plus SOURCE, an earlier {times} elaboration of TEXT that this commentary elaborates further"
+        if source_key and not sofar
+        else ""
+    )
+    system = PARTS_PROMPT.format(
+        source_clause=source_clause,
+        label=spec.label(key, target, orig_tokens),
+        wpt=WORDS_PER_TOKEN,
+        struct=struct_of(chunk, parts=True),
+    )
+    user = turn_block(text, call)
+    if source_key and not sofar:
+        user += f"\n\nSOURCE ({times} TEXT's length):\n{source}"
+    if sofar:
+        user += (
+            f"\n\nWRITTEN SO FAR ({sofar_tokens} of the {target} tokens):\n"
+            f"{_clip(sofar, MAX_SOFAR_CHARS, SOFAR_TAIL)}"
+        )
+    shape = shape_of(chunk, parts=True)
+    if not sofar and final:
+        ask = f"Write the whole commentary now: {shape}."
+    elif not sofar:
+        ask = f"Write the opening part now: {shape}. More parts will follow, so do not wrap up or conclude."
+    elif final:
+        ask = f"Write the final part now: {shape}, and bring the commentary to a close that leads into the tool call."
+    else:
+        ask = f"Write the next part now: {shape}. More parts will follow, so do not wrap up or conclude."
+    if note:
+        ask += f" {note}"
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"{user}\n\n{ask}"},
+    ]
+
+
 _JSON_SPAN = re.compile(r"\{.*\}", re.DOTALL)
 
 
@@ -335,6 +452,18 @@ def _lenient_extract(s: str, keys: list[str]) -> dict[str, str]:
     return out
 
 
+def extract_partial(raw: str, key: str) -> str | None:
+    """The value of `key` in a reply whose JSON never closes (cut off mid-string, or the model stopped without the closing brace): everything after its opening quote, minus a trailing quote/brace."""
+    m = re.search('"' + re.escape(key) + r'"\s*:\s*"', raw or "")
+    if not m:
+        return None
+    v = re.sub(r'"?\s*}?\s*(```)?\s*$', "", raw[m.end() :].rstrip())
+    v = _unescape(re.sub(r"\\+$", "", v)).strip()
+    if not v or any(f in v for f in FORBIDDEN):
+        return None
+    return v
+
+
 def parse_versions(raw: str, keys: list[str]) -> dict[str, str]:
     """Extract the requested keys from the model's reply, in reply order; missing or invalid keys are absent."""
     s = (raw or "").strip()
@@ -359,8 +488,64 @@ def parse_versions(raw: str, keys: list[str]) -> dict[str, str]:
     }
 
 
+class AdaptiveLimiter:
+    """Cap on in-flight requests that backs off on a 429 and creeps back up on clean calls.
+
+    The gateway's throughput swings with other tenants' load: a worker count that saturates a
+    slow endpoint triggers 429 storms once it speeds up, and one that is safe when it is fast
+    idles when it is slow. On a rate limit the cap drops to 3/4 (never below `lo`) and every
+    request waits out a short cooldown, which is the small-scale form of the full stop that
+    clears a storm; after `up_after` consecutive clean calls the cap grows by one, up to `hi`.
+    """
+
+    def __init__(
+        self,
+        start: int,
+        lo: int,
+        hi: int,
+        up_after: int = 30,
+        cooldown_s: float = 20.0,
+        log: bool = True,
+    ):
+        self.cap = max(lo, min(start, hi))
+        self.lo, self.hi = lo, hi
+        self.up_after = up_after
+        self.cooldown_s = cooldown_s
+        self.log = log
+        self.cv = threading.Condition()
+        self.inflight = 0
+        self.ok_streak = 0
+        self.cooldown_until = 0.0
+
+    def acquire(self) -> None:
+        with self.cv:
+            while self.inflight >= self.cap or time.time() < self.cooldown_until:
+                self.cv.wait(timeout=2.0)
+            self.inflight += 1
+
+    def release(self, rate_limited: bool) -> None:
+        with self.cv:
+            self.inflight -= 1
+            if rate_limited:
+                new = max(self.lo, self.cap * 3 // 4)
+                self.cooldown_until = time.time() + self.cooldown_s
+                if new != self.cap and self.log:
+                    print(f"  limiter: cap {self.cap} -> {new} (429)", file=sys.stderr)
+                self.cap, self.ok_streak = new, 0
+            else:
+                self.ok_streak += 1
+                if self.ok_streak >= self.up_after and self.cap < self.hi:
+                    if self.log:
+                        print(
+                            f"  limiter: cap {self.cap} -> {self.cap + 1} (clean streak)",
+                            file=sys.stderr,
+                        )
+                    self.cap, self.ok_streak = self.cap + 1, 0
+            self.cv.notify_all()
+
+
 class Rephraser:
-    """OpenAI-compatible client with gateway-friendly retries."""
+    """OpenAI-compatible client with gateway-friendly retries and an adaptive in-flight cap."""
 
     def __init__(
         self,
@@ -373,6 +558,7 @@ class Rephraser:
         max_attempts: int = 8,
         backoff_base_s: float = 3.0,
         request_timeout_s: float = 600.0,
+        limiter: AdaptiveLimiter | None = None,
     ):
         self.client = OpenAI(
             api_key=api_key, base_url=base_url, timeout=request_timeout_s, max_retries=0
@@ -383,6 +569,7 @@ class Rephraser:
         self.extra_body = extra_body or {}
         self.max_attempts = max_attempts
         self.backoff_base_s = backoff_base_s
+        self.limiter = limiter
 
     def complete(
         self,
@@ -392,6 +579,8 @@ class Rephraser:
     ) -> tuple[str, dict]:
         """Return (content, usage); raise the last error once max_attempts are exhausted."""
         for attempt in range(1, self.max_attempts + 1):
+            if self.limiter:
+                self.limiter.acquire()
             try:
                 r = self.client.chat.completions.create(
                     model=self.model,
@@ -403,9 +592,11 @@ class Rephraser:
                     extra_body=self.extra_body,
                 )
             except Exception as e:  # noqa: BLE001 - every gateway failure is retryable
+                desc = f"{type(e).__name__}: {str(e)[:140]}"
+                if self.limiter:
+                    self.limiter.release("429" in desc or "RateLimit" in desc)
                 if attempt == self.max_attempts:
                     raise
-                desc = f"{type(e).__name__}: {str(e)[:140]}"
                 delay = (
                     self.backoff_base_s * 2 ** (attempt - 1) * (0.5 + random.random())
                 )
@@ -417,6 +608,8 @@ class Rephraser:
                 )
                 time.sleep(delay)
                 continue
+            if self.limiter:
+                self.limiter.release(False)
             usage = {
                 "prompt_tokens": getattr(r.usage, "prompt_tokens", None),
                 "completion_tokens": getattr(r.usage, "completion_tokens", None),

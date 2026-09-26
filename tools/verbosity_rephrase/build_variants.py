@@ -6,7 +6,8 @@ Two families, one HF dataset per variant, named <base>_<variant>:
     text20/50/100/300      prose rephrased to ~N tokens + the tool call
   scaled  think / task_tracker turns kept verbatim
     text0x                 every other assistant turn is its tool call only (no LLM involved)
-    text0.5x/2x/4x/8x      prose rephrased to N x its own length + the tool call
+    text0.5x/2x/4x/8x/32x  prose rephrased to N x its own length + the tool call (32x written
+                           in parts from the 8x version; its rephrase jsonl is the x32 output)
 A turn whose version missed its band, or was not requested (empty prose, target outside the
 floor/cap), keeps its original prose. Everything else (system prompt, task, tool results, the
 tool calls themselves) is byte-identical to the base.
@@ -38,7 +39,14 @@ from huggingface_hub import HfApi
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from llm import DEFAULT_TOLERANCE, MAX_TARGET, MIN_TARGET, SPECS, band  # noqa: E402
+from llm import (  # noqa: E402
+    DEFAULT_TOLERANCE,
+    MIN_TARGET,
+    PART_MAX,
+    SPECS,
+    ScaledLengths,
+    band,
+)
 from tokens import count_tokens  # noqa: E402
 from trajectory import (  # noqa: E402
     FUNCTION_BLOCK,
@@ -74,6 +82,7 @@ FAMILIES = {
             "text2x": "x2",
             "text4x": "x4",
             "text8x": "x8",
+            "text32x": "x32",
         },
         keep_think=True,
     ),
@@ -195,11 +204,19 @@ def card(
             f"{stats['fallback']} of {stats['turns']} turns missed the band and keep their original prose)."
         )
     else:
-        mult = SPECS["scaled"].MULT[key]
+        scaled = SPECS["scaled"]
+        assert isinstance(scaled, ScaledLengths)
+        mult, cap = scaled.MULT[key], scaled.cap(key)
+        how = (
+            f"written in consecutive parts of at most {PART_MAX} tokens, each request continuing the text so far, "
+            f"starting from the accepted 8x version as its source"
+            if key in scaled.PARTS
+            else "up to 3 rounds"
+        )
         what = (
             f"the prose before every tool call is rewritten by `{model}` to {mult:g} times its own length "
-            f"in Qwen3 tokens (accepted band ±{pct} %, up to 3 rounds). Of {stats['turns']} turns, "
-            f"{stats['skipped']} were not rephrased (empty prose, or a target outside {MIN_TARGET}-{MAX_TARGET} "
+            f"in Qwen3 tokens (accepted band ±{pct} %, {how}). Of {stats['turns']} turns, "
+            f"{stats['skipped']} were not rephrased (empty prose, or a target outside {MIN_TARGET}-{cap} "
             f"tokens) and {stats['fallback']} missed the band; both keep their original prose."
         )
     if family == "fixed":
@@ -213,18 +230,19 @@ def card(
         table_extra = ""
     else:
         construction = (
-            "Construction (shared by the `_text0x/0.5x/2x/4x/8x` siblings): `think` and `task_tracker` turns are kept\n"
+            "Construction (shared by the `_text0x/0.5x/2x/4x/8x/32x` siblings): `think` and `task_tracker` turns are kept\n"
             "verbatim, as are the system prompt, task, tool calls and tool results. For the rephrased siblings the\n"
             "rephraser saw only the current turn (its prose + its tool call) and wrote the four versions in one response\n"
             "as a ladder (0.5x shortens the original, 2x elaborates it, 4x elaborates the 2x, 8x elaborates the 4x), so\n"
-            "the four lengths share one meaning. A turn's targets are multiples of its own prose length, so empty turns\n"
-            "stay empty."
+            "the four lengths share one meaning; the 32x version was written afterwards by elaborating the 8x version\n"
+            "further, in parts. A turn's targets are multiples of its own prose length, so empty turns stay empty."
         )
         ratios = stats["ratios"]
+        cap = SPECS["scaled"].cap(key) if key else 0
         table_extra = (
             f"| prose tokens / base prose tokens, rephrased turns: mean / median | "
             f"{statistics.mean(ratios):.2f} / {statistics.median(ratios):.2f} |\n"
-            f"| turns not rephrased (empty prose or target outside {MIN_TARGET}-{MAX_TARGET} tokens) | {stats['skipped']} |\n"
+            f"| turns not rephrased (empty prose or target outside {MIN_TARGET}-{cap} tokens) | {stats['skipped']} |\n"
             if key
             else ""
         )
