@@ -1,9 +1,11 @@
 """Assemble the verbosity variants of a dataset from rephrase.py output and (optionally) push them.
 
-Three families, one HF dataset per variant, named <base>_<variant>:
+Four families, one HF dataset per variant, named <base>_<variant>:
   fixed   think / task_tracker turns and their results removed
     text0                  every assistant turn is its tool call only (no LLM involved)
     text20/50/100/300      prose rephrased to ~N tokens + the tool call
+  withthink  the fixed family's prose with think / task_tracker turns kept verbatim (no LLM involved;
+    text20..300_withthink  its text0 would be the scaled family's text0x, so it has none)
   scaled  think / task_tracker turns kept verbatim
     text0x                 every other assistant turn is its tool call only (no LLM involved)
     text0.5x/2x/4x/8x/32x  prose rephrased to N x its own length + the tool call (32x written
@@ -105,6 +107,16 @@ FAMILIES = {
             "text4x": "x4",
             "text8x": "x8",
             "text32x": "x32",
+        },
+        think="keep",
+        plan="keep",
+    ),
+    "withthink": Family(
+        {
+            "text20_withthink": "t20",
+            "text50_withthink": "t50",
+            "text100_withthink": "t100",
+            "text300_withthink": "t300",
         },
         think="keep",
         plan="keep",
@@ -292,7 +304,7 @@ def card(
             "every assistant turn other than `think` / `task_tracker` is its tool call only: the prose before "
             "the call is removed, while the thinking/planning steps stay."
         )
-    elif family == "fixed":
+    elif family in ("fixed", "withthink"):
         target = SPECS["fixed"].TARGETS[key]
         lo, hi = band(target, tolerance)
         what = (
@@ -339,6 +351,17 @@ def card(
                 f"| thought tokens / base thought tokens, rephrased thoughts: mean / median | "
                 f"{statistics.mean(th['ratios']):.2f} / {statistics.median(th['ratios']):.2f} |\n"
             )
+    elif family == "withthink":
+        construction = (
+            "Construction (shared by the `_text20/50/100/300_withthink` siblings): the prose of every turn is the very\n"
+            "same rewritten text as in the `_text20/50/100/300` siblings, but the `think` and `task_tracker` turns (the\n"
+            "thinking/planning steps) are kept verbatim instead of removed, as in the `_text0x/0.5x/2x/4x/8x/32x` siblings\n"
+            "(`_text0` with them kept is `_text0x`). The system prompt, task, tool calls and tool results are byte-identical\n"
+            "to the base. The rephraser saw only the current turn (its prose + its tool call); the ~300-token version was\n"
+            "written first and condensed to 100/50/20 in the same response so the four lengths share one meaning. Turns\n"
+            "with no original prose received prose explaining their tool call."
+        )
+        table_extra = ""
     elif family == "fixed":
         construction = (
             "Construction (shared by all `_text*` siblings): `think` and `task_tracker` turns and their result turns are\n"
@@ -375,7 +398,7 @@ def card(
     turns_row = "assistant turns (excluding think/task_tracker)"
     if family == "fixed":
         think_row = f"think/task_tracker turns removed | {stats['dropped']}"
-    elif family == "scaled":
+    elif family in ("scaled", "withthink"):
         think_row = f"think/task_tracker turns kept verbatim | {stats['think']}"
     else:
         think_row = f"think turns removed / task_tracker turns kept verbatim | {stats['dropped']} / {stats['think']}"

@@ -2,12 +2,13 @@
 
 Builds the **verbosity ablation** datasets: the same trajectories with the agent's prose (the
 natural-language part of each assistant turn, outside the tool call) removed or rewritten to a
-controlled length. Three families:
+controlled length. Three families, plus a rebuild of A:
 
 | family | variants | think / task_tracker turns | prose per turn |
 |---|---|---|---|
 | A `fixed` | `_text0`, `_text20`, `_text50`, `_text100`, `_text300` | removed, with their result turns | none, or ~20 / 50 / 100 / 300 tokens for every turn |
 | B `scaled` | `_text0x`, `_text0.5x`, `_text2x`, `_text4x`, `_text8x`, `_text32x` | kept verbatim | none, or ½ / 2 / 4 / 8 / 32 × the turn's **own** prose length |
+| A+ `withthink` | `_text20_withthink`, `_text50_withthink`, `_text100_withthink`, `_text300_withthink` | kept verbatim | family A's text: ~20 / 50 / 100 / 300 tokens for every turn |
 | C `think` | `_text0x_think0x`, `_text0.5x_think0.5x`, `_text2x_think2x`, `_text4x_think4x`, `_text8x_think8x`, `_text32x_think32x` | task_tracker kept verbatim; think turns rephrased (their prose and their `thought`), removed at 0× | family B's prose, plus each think turn's prose and thought at the same multiple of their own lengths |
 
 Sources: `synthetic-code-training/func_localize_claude45_1457i` and
@@ -254,6 +255,15 @@ All ten `_text{0x..8x}_think*` datasets were validated fresh from HF: every non-
 to family B's same-N dataset (B's `_text0x` minus the think turns for `_text0x_think0x`), every think
 call identical to the base apart from its thought. The x32 rung runs as a second pass with the
 16 000-token clamp.
+
+Family A+ `withthink` (2026-09-26, Gaokai: add the thinking/planning steps back into text0 … text300,
+so that they differ from the `_text<N>x` datasets only in token counts and in the way the prose was
+rewritten): no LLM calls, family A's rephrase jsonl rebuilt with `think` / `task_tracker` turns kept
+verbatim, pushed as new datasets. Removing their think turns gives back `_text20` … `_text300` byte for
+byte, and `_text0` with the think turns kept is byte-identical to `_text0x`, so it has no `_withthink`
+twin. Beyond the length rule, A+ and B differ in one more way: A gives turns without prose (60 % of
+claude45's) prose explaining the call, B leaves them empty. Family A has no repeat problem (every
+version is written in one reply: 0.02 % / 0.01 % repeated sentences in `t300`, none below it).
 
 `dedupe_parts.py` (2026-09-26) removed the repeated sentences from family B's x32 rung after the fact
 (see Family C, 5.): each accepted x32 version loses its repeated sentences; one that falls under its
