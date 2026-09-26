@@ -2,12 +2,13 @@
 
 Builds the **verbosity ablation** datasets: the same trajectories with the agent's prose (the
 natural-language part of each assistant turn, outside the tool call) removed or rewritten to a
-controlled length. Two families:
+controlled length. Three families:
 
 | family | variants | think / task_tracker turns | prose per turn |
 |---|---|---|---|
 | A `fixed` | `_text0`, `_text20`, `_text50`, `_text100`, `_text300` | removed, with their result turns | none, or ~20 / 50 / 100 / 300 tokens for every turn |
 | B `scaled` | `_text0x`, `_text0.5x`, `_text2x`, `_text4x`, `_text8x`, `_text32x` | kept verbatim | none, or ½ / 2 / 4 / 8 / 32 × the turn's **own** prose length |
+| C `think` | `_text0x_think0x`, `_text0.5x_think0.5x`, `_text2x_think2x`, `_text4x_think4x`, `_text8x_think8x`, `_text32x_think32x` | task_tracker kept verbatim; think turns rephrased (their prose and their `thought`), removed at 0× | family B's prose, plus each think turn's prose and thought at the same multiple of their own lengths |
 
 Sources: `synthetic-code-training/func_localize_claude45_1457i` and
 `synthetic-code-training/r2egym_qwen3next80b_1500i`; outputs are `<base>_<variant>` in the same
@@ -67,16 +68,67 @@ task_tracker turns kept verbatim, no LLM involved.
    wasted a third of the calls; and a rejected reply is re-asked with the reason (quoted
    tool-call markup, no JSON, a restart instead of a continuation).
 
+Family C (2026-09-26, Gaokai: "keep think and plan, scale non-tool-call regular text, scale think
+but do not scale plan; the only difference with last round is that we also scale thinking
+content"): family B plus the `think` turns.
+
+1. Every non-think turn carries **family B's very text** (its `<base>.scaled.x32.jsonl` records),
+   so `_text<N>x_think<N>x` differs from `_text<N>x` only in its think turns. `task_tracker`
+   turns stay verbatim, as in B.
+2. A think turn's prose before the call is rephrased like any other prose (same spec, same caps),
+   and the call's `thought` argument is rewritten to the same multiple of its own length; the
+   `summary` argument and the whitespace around the thought stay byte-identical. At 0× the think
+   turns are removed with their results (a think call with an empty thought is meaningless), so
+   `_text0x_think0x` keeps only the tool calls and the planning steps.
+3. Thoughts are long where prose is short (claude45: 3 738 thoughts, median 304 tokens, p90 545,
+   max 4 134, 1.2M tokens in all; r2egym: 8 thoughts, median 106), so B's caps would leave them
+   unscaled: with the one-reply 2 000-token cap, 8× reaches only 36 % of claude45's thoughts, and
+   with B's 8 000-token x32 cap 32× also reaches 36 % while the other 64 % stay at 1×, i.e.
+   `_text32x_think32x` would carry less thinking in total (~6×) than `_text8x_think8x` (~7.7×).
+   So a thought's x0.5 and every rung of at most 600 tokens (`THOUGHT_LADDER_MAX`) are written in
+   one reply as B does, and every longer rung is **written in parts** (B's x32 writer) from the
+   longest accepted rung below it (x2 from the thought, x4 from x2, x8 from x4, x32 from x8), with
+   caps of 8 000 tokens for x2 / x4 / x8 (99 % of thoughts scaled at 8×). x32 is **clamped** at
+   16 000 tokens (`THOUGHT_X32_CLAMP`, Gaokai 2026-09-26) instead of capped: thoughts of up to 500
+   tokens (87 %) get a full 32×, longer ones are written at 16 000 tokens, so every thought still
+   grows from 8× to 32× and the rung carries 29.6× the base thinking in total. Past ~15K tokens the
+   model runs out of things to say and pads (see 5.), which is what the clamp avoids; skipping
+   over-cap thoughts as B does would leave 64 % of them at 1×, i.e. less thinking in
+   `_text32x_think32x` (~6×) than in `_text8x_think8x` (~7.7×). The price is length: claude45
+   trajectories (base median 22K tokens) reach a median of 29K at 8× and 53K (p90 87K, max 192K)
+   at 32×, versus 30K / 54K / 128K for B's `_text32x`.
+4. The thought prompts (`THOUGHT_*` in `llm.py`) replace B's "commentary before a tool call"
+   framing with "the reasoning the agent records with its think tool": the rewriter sees only the
+   thought and the call's summary, keeps conclusions and concrete references, uses lists and code
+   only where the thought does, and reproduces quoted code exactly and at most once.
+5. Repeats (added for family C; affects every version written in parts from now on): deep into a
+   long version the model sees only the head and tail of the text so far and re-emits earlier
+   sentences. Family B's parts writer rejected a part only when it *opened* with earlier text, so
+   16.5 % of the sentences of claude45's `_text32x` versions over 4 000 tokens are verbatim repeats
+   (6.1 % over all its x32 versions, 9.6 % for r2egym; ≤ 0.2 % for every ladder rung). Each part now
+   loses the sentences of 40+ characters (outside code blocks) that the text so far or the part
+   itself already has, and a part that loses more than half of its tokens that way is re-asked as
+   a restart. On 11 thoughts (80-717 tokens) the x32 rung went from 2 fallbacks and 5.7 % repeated
+   sentences to 0 and 0 %, and the share of distinct word 4-grams rose from 0.60-0.83 to 0.85-0.91
+   for 5-12K-token versions. It does not rescue the longest ones: past ~15K tokens the model pads
+   with short sentences ("I will act now. That is the plan."), 0.70 / 0.46 for the 20K / 22K-token
+   x32 versions of 648 / 717-token thoughts.
+6. Runs: `rephrase.py --family think` makes two units per think turn (field `text`, spec
+   `scaled`; field `thought`, spec `thought`); records are keyed by (instance, message, field).
+   Pass 1 writes x0.5 … x8 (`--keys x0.5,x2,x4,x8` → `<base>.think.x0.5+x2+x4+x8.jsonl`), pass 2
+   adds x32 on top (`--keys x32 --prior` it → `<base>.think.x32.jsonl`), as B's x32 rung did.
+
 ## Files
 
 | file | role |
 |---|---|
-| `trajectory.py` | split a turn into prose / call / tool name; positional call↔result pairing; skeleton (think turns dropped or kept verbatim); reassembly |
+| `trajectory.py` | split a turn into prose / call / tool name; positional call↔result pairing; skeleton (think / task_tracker turns dropped, kept verbatim, or split); thought extraction and replacement; reassembly |
 | `tokens.py` | token counting with `Qwen/Qwen3-8B` (same vocabulary as Qwen2.5-Coder) |
-| `llm.py` | the two length specs, the prompts (first round + retry), reply parsing, gateway client with backoff |
-| `rephrase.py` | the LLM driver: one work unit per non-think assistant turn, per-request `max_tokens`, resumable jsonl output; `--keys x32 --prior <jsonl>` adds the parts-written rung to a finished run |
+| `llm.py` | the three length specs (fixed, scaled, thought), the prompts (first round + retry + parts), reply parsing, gateway client with backoff and adaptive in-flight cap |
+| `rephrase.py` | the LLM driver: one work unit per non-think assistant turn (family think: two per think turn), per-request `max_tokens`, resumable jsonl output; `--keys x32 --prior <jsonl>` adds the parts-written rung to a finished run |
 | `build_variants.py` | assemble a family's variants, validate, save to disk, push with a dataset card |
-| `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, `FAMILY=fixed|scaled`, `KEYS=x32` for the added rung, re-entrant |
+| `dedupe_parts.py` | remove repeated sentences from one rung of a finished run, topping up versions that fall under their band |
+| `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, `FAMILY=fixed|scaled|think`, `KEYS` for a subset of rungs / the added x32 rung, re-entrant |
 
 ## Data facts that shaped the code
 
@@ -191,6 +243,26 @@ The 8× fallback is a function of the original length (claude45 / r2egym): 0 % /
 three rounds: 30 / 55 / 15 % (claude45), 22 / 58 / 20 % (r2egym); 0 API errors in either run. The
 r2egym run sat at the gateway's ~96K tokens/min the whole time.
 
+Family C (2026-09-26, adaptive limiter 16/4/8; "thoughts kept original" = band missed + not requested):
+
+| dataset | think turns | thoughts kept original ½× / 2× / 4× / 8× | thought ratio mean ½× / 2× / 4× / 8× | LLM tokens in / out (pass 1) | wall time |
+|---|---|---|---|---|---|
+| claude45 | 3 738 (+ 524 lead-ins) | 4 / 11 / 42 / 103 (37 of them over the 8× cap) | 0.53 / 2.06 / 4.23 / 8.37 | 40.3M / 22.8M, 5.8 calls per thought | 9.8 h |
+| r2egym | 8 (+ 8 lead-ins) | 0 / 0 / 0 / 0 | 0.52 / 2.03 / 4.3 / 8.9 | 0.1M | 3 min |
+
+All ten `_text{0x..8x}_think*` datasets were validated fresh from HF: every non-think message identical
+to family B's same-N dataset (B's `_text0x` minus the think turns for `_text0x_think0x`), every think
+call identical to the base apart from its thought. The x32 rung runs as a second pass with the
+16 000-token clamp.
+
+`dedupe_parts.py` (2026-09-26) removed the repeated sentences from family B's x32 rung after the fact
+(see Family C, 5.): each accepted x32 version loses its repeated sentences; one that falls under its
+band is topped up with further parts (with the filter) or, when the model has nothing new left to say
+and every continuation is itself a repeat, keeps the shorter deduplicated text (~21-23×, flagged
+`below_band` and counted on the card). `_text32x` was re-pushed for both datasets; the pre-dedupe
+records are kept as `<base>.scaled.x32.predup.jsonl`. The ½×-8× datasets were left alone (≤ 0.2 %
+repeats, and students have been trained on them).
+
 ## Usage
 
 ```bash
@@ -198,6 +270,9 @@ r2egym run sat at the gateway's ~96K tokens/min the whole time.
 tmux new -d -s verbosity 'FAMILY=scaled bash tools/verbosity_rephrase/run_pipeline.sh'
 # the 32x rung on top of a finished scaled run (reads <base>.scaled.jsonl, pushes _text32x only)
 tmux new -d -s verbosity-x32 'FAMILY=scaled KEYS=x32 bash tools/verbosity_rephrase/run_pipeline.sh'
+
+# family C (think turns on top of the finished family B): x0.5..x8 plus the prose-free variant, then x32
+tmux new -d -s verbosity-think 'FAMILY=think KEYS=x0.5,x2,x4,x8 VARIANTS=text0x_think0x,text0.5x_think0.5x,text2x_think2x,text4x_think4x,text8x_think8x WORKERS=16 WORKERS_MIN=4 WORKERS_START=8 bash tools/verbosity_rephrase/run_pipeline.sh && FAMILY=think KEYS=x32 WORKERS=16 WORKERS_MIN=4 WORKERS_START=8 bash tools/verbosity_rephrase/run_pipeline.sh'
 
 # pieces
 .venv/bin/python tools/verbosity_rephrase/rephrase.py --family scaled --hf synthetic-code-training/func_localize_claude45_1457i \
@@ -211,6 +286,13 @@ tmux new -d -s verbosity-x32 'FAMILY=scaled KEYS=x32 bash tools/verbosity_rephra
 .venv/bin/python tools/verbosity_rephrase/build_variants.py --family scaled --variants text32x \
     --hf synthetic-code-training/func_localize_claude45_1457i \
     --rephrase eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.scaled.x32.jsonl \
+    --out-dir eval_outputs/verbosity_rephrase/variants --push
+.venv/bin/python tools/verbosity_rephrase/rephrase.py --family think --keys x0.5,x2,x4,x8 \
+    --hf synthetic-code-training/func_localize_claude45_1457i --out-dir eval_outputs/verbosity_rephrase --workers 6
+.venv/bin/python tools/verbosity_rephrase/build_variants.py --family think --variants text0x_think0x,text2x_think2x \
+    --hf synthetic-code-training/func_localize_claude45_1457i \
+    --rephrase eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.scaled.x32.jsonl \
+    --rephrase eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.think.x0.5+x2+x4+x8.jsonl \
     --out-dir eval_outputs/verbosity_rephrase/variants --push
 ```
 

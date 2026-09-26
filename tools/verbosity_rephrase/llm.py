@@ -4,7 +4,7 @@ The rephraser sees only the current assistant turn (its prose and its tool call)
 of a turn come from one response, each derived from another, so they share one meaning. Lengths are measured with the student tokenizer (tokens.py); a version outside
 its band is re-requested with the measured count as feedback.
 
-Two length specs (families):
+Three length specs:
   fixed   t300 / t100 / t50 / t20: the same absolute targets for every turn
   scaled  x0.5 / x2 / x4 / x8: multiples of the turn's own prose length, written as a ladder
           (x0.5 shortens the prose; x2 elaborates it; x4 elaborates x2; x8 elaborates x4); a
@@ -13,6 +13,9 @@ Two length specs (families):
           x32: written afterwards from the longest accepted rung (x8, else x4, x2, the prose) as
           the SOURCE, in consecutive parts of at most PART_MAX tokens (each request sees the
           text so far and writes the next part), capped at MAX_TARGET_PARTS
+  thought the same multiples of a think call's `thought` argument; thoughts are long (claude45
+          median 304 tokens), so only x0.5 and the rungs of at most THOUGHT_LADDER_MAX tokens are
+          written in one reply, every longer rung in parts from the rung below it
 """
 
 from __future__ import annotations
@@ -39,6 +42,8 @@ LONG_ASK = 0.6  # per doubling of the target above 300 tokens: the model writes 
 MIN_TARGET = 4  # tokens; halving a shorter turn is meaningless
 MAX_TARGET = 2000  # tokens; above this the model stops well short however it is asked
 MAX_TARGET_PARTS = 8000  # tokens; cap for versions written in parts (x32 of a 250-token turn, the same turns x8 reaches)
+THOUGHT_LADDER_MAX = 600  # tokens; a thought's rungs above this are written in parts (one-reply rungs of 600-2000 tokens miss the band 5-26 % of the time)
+THOUGHT_X32_CLAMP = 16000  # tokens; a thought's x32 target is at most this (full 32x for thoughts up to 500 tokens, 87 % of claude45's): longer versions degenerate into filler
 PART_MAX = 1500  # tokens; longest part asked for in one request
 PARTS_STOP = 0.9  # stop adding parts once the text reaches this fraction of the target (the band is wider)
 MAX_SOFAR_CHARS = 8000  # the text so far is shown head + tail beyond this
@@ -53,6 +58,7 @@ FORBIDDEN = (
     "<tool_call>",
     "</tool_call>",
     "<invoke",
+    "</parameter>",
 )
 
 RULES = """- Preserve the meaning and intent of TEXT. Do not invent facts, findings, file contents, or results that TEXT and the TOOL CALL do not state or imply. Longer versions elaborate on the same intent (what I am looking for, why this step, how it relates to the task, what I expect to learn); they never add new steps or new discoveries. Shorter versions condense the same content.
@@ -78,10 +84,32 @@ Length targets (1 token is about {wpt} words):
 Respond with ONLY a JSON object of the form {form}."""
 )
 
+THOUGHT_RULES = """- Preserve the reasoning, conclusions and intent of THOUGHT. Do not invent facts, findings, file contents, code, line numbers or results that THOUGHT does not state or imply. Longer versions think the same reasoning through in more depth (what each observation means, why each alternative THOUGHT weighs is kept or ruled out, how the conclusion follows, what it implies for the next step); they never reach new conclusions, add new discoveries or plan different steps. Shorter versions condense the same reasoning and keep its conclusions and concrete references (files, functions, line numbers).
+- Keep the voice and form of THOUGHT: the agent reasoning to itself in the first person. Use lists or code only where THOUGHT does; code or text that THOUGHT quotes is reproduced exactly, never altered or extended, and quoted at most once - a shorter version may refer to a quotation instead of repeating it.
+- SUMMARY is the agent's own one-line label for this step: use it as context, never mention it.
+- No headings unless THOUGHT has them, no XML tags or tool-call markup, no meta-language about "the thought", "the summary" or these instructions."""
+
+THOUGHT_SYSTEM_PROMPT = (
+    """You rewrite the private reasoning that a software-engineering agent records with its `think` tool between tool calls, at controlled lengths.
+
+You are given ONE thinking step: its THOUGHT and the agent's SUMMARY of it. Produce the thought at {n} target lengths.
+
+Rules:
+"""
+    + THOUGHT_RULES
+    + """
+- {order}
+
+Length targets (1 token is about {wpt} words):
+{targets}
+
+Respond with ONLY a JSON object of the form {form}."""
+)
+
 PARTS_PROMPT = (
     """You write the natural-language commentary that a software-engineering agent writes alongside a tool call, at a controlled length.
 
-You are given ONE agent turn: its TEXT (the prose the agent wrote before the tool call; may be empty) and its TOOL CALL{source_clause}. The commentary for this turn is to be {label} - far longer than TEXT - and is produced over one or more requests, each writing the next part; the parts are concatenated into one continuous text.
+You are given ONE agent turn: its TEXT (the prose the agent wrote before the tool call; may be empty) and its TOOL CALL{source_clause}. The commentary for this turn is to be {label}{longer} and is produced over one or more requests, each writing the next part; the parts are concatenated into one continuous text.
 
 Rules:
 """
@@ -93,6 +121,24 @@ Length of this part (1 token is about {wpt} words): {struct}.
 
 Respond with ONLY a JSON object of the form {{"part": "..."}}."""
 )
+
+THOUGHT_PARTS_PROMPT = (
+    """You rewrite the private reasoning that a software-engineering agent records with its `think` tool between tool calls, at a controlled length.
+
+You are given ONE thinking step: its THOUGHT and the agent's SUMMARY of it{source_clause}. The rewritten thought is to be {label} and is produced over one or more requests, each writing the next part; the parts are concatenated into one continuous text.
+
+Rules:
+"""
+    + THOUGHT_RULES
+    + """
+- When WRITTEN SO FAR is given, continue seamlessly from its last sentence: do not restart, recap or repeat what it already says, and do not announce or number the part. Each part reasons further about aspects not yet covered - what each observation in THOUGHT means and why it matters, the alternatives THOUGHT weighs and why each is kept or ruled out, how the conclusion follows, what it implies for the next step - always anchored in THOUGHT.
+
+Length of this part (1 token is about {wpt} words): {struct}.
+
+Respond with ONLY a JSON object of the form {{"part": "..."}}."""
+)
+
+SUMMARY = re.compile(r"<parameter=summary>(.*?)</parameter>", re.DOTALL)
 
 RETRY_INSTRUCTIONS = """Some versions were outside their length band. Rewrite ONLY the versions listed below, condensing or expanding the SOURCE text (keep its meaning; same rules as before). Each version gets two candidates of different lengths, written independently:
 
@@ -148,6 +194,8 @@ class FixedLengths:
     keys = ("t300", "t100", "t50", "t20")
     LADDER = keys  # all written in one reply
     PARTS: tuple[str, ...] = ()
+    SYSTEM = SYSTEM_PROMPT
+    MORE = "say more about what this step examines and what I expect to learn"
     TARGETS = {"t300": 300, "t100": 100, "t50": 50, "t20": 20}
     # Models follow a structure with a floor ("three paragraphs of about 110 words each, never
     # fewer than 280 words") far better than a bare word count; see the README.
@@ -166,6 +214,13 @@ class FixedLengths:
 
     def targets(self, orig_tokens: int) -> dict[str, int]:
         return dict(self.TARGETS)
+
+    def split(self, targets: dict[str, int]) -> tuple[dict[str, int], list[str]]:
+        """(the keys written in one reply with their targets, the keys written in parts afterwards)."""
+        return dict(targets), []
+
+    def block(self, text: str, call: str) -> str:
+        return turn_block(text, call)
 
     def cap(self, key: str) -> int:
         return MAX_TARGET
@@ -200,7 +255,14 @@ class ScaledLengths:
     MULT = {"x0.5": 0.5, "x2": 2, "x4": 4, "x8": 8, "x32": 32}
     LADDER = ("x0.5", "x2", "x4", "x8")  # one reply
     PARTS = ("x32",)  # written afterwards, in parts, from the longest accepted rung
-    CAP = {"x32": MAX_TARGET_PARTS}
+    CAP: dict[str, int] = {"x32": MAX_TARGET_PARTS}
+    SYSTEM = SYSTEM_PROMPT
+    PARTS_SYSTEM = PARTS_PROMPT
+    SUBJECT = "TEXT"  # what the prompts call the text being rewritten
+    NOUN = "commentary"
+    LONGER = " - far longer than TEXT -"
+    CLOSE = "bring the commentary to a close that leads into the tool call"
+    MORE = "say more about what this step examines and what I expect to learn"
 
     def targets(self, orig_tokens: int) -> dict[str, int]:
         out = {}
@@ -213,15 +275,24 @@ class ScaledLengths:
     def cap(self, key: str) -> int:
         return self.CAP.get(key, MAX_TARGET)
 
+    def split(self, targets: dict[str, int]) -> tuple[dict[str, int], list[str]]:
+        """(the keys written in one reply with their targets, the keys written in parts afterwards)."""
+        return {k: t for k, t in targets.items() if k in self.LADDER}, [
+            k for k in self.PARTS if k in targets
+        ]
+
+    def block(self, text: str, call: str) -> str:
+        return turn_block(text, call)
+
     def order_rule(self, keys: list[str]) -> str:
         parts = []
         if "x0.5" in keys:
             parts.append(
-                "Write x0.5 by shortening TEXT to half its length: keep every point and concrete "
+                f"Write x0.5 by shortening {self.SUBJECT} to half its length: keep every point and concrete "
                 "reference it makes, just say each more briefly."
             )
         steps = []
-        prev, prev_mult = "TEXT", 1.0
+        prev, prev_mult = self.SUBJECT, 1.0
         for k in keys:
             if self.MULT[k] <= 1:
                 continue
@@ -241,7 +312,7 @@ class ScaledLengths:
     def label(self, key: str, tokens: int, orig_tokens: int) -> str:
         m = self.MULT[key]
         times = "half of" if m < 1 else f"{m} times"
-        return f"{times} TEXT's {orig_tokens} tokens = {tokens} tokens"
+        return f"{times} {self.SUBJECT}'s {orig_tokens} tokens = {tokens} tokens"
 
     def struct(self, key: str, tokens: int) -> str:
         return struct_of(tokens)
@@ -254,17 +325,72 @@ class ScaledLengths:
         return text
 
     def parts_source(
-        self, text: str, versions: dict[str, dict]
+        self, key: str, text: str, versions: dict[str, dict]
     ) -> tuple[str | None, str]:
-        """(rung key, text) of the longest accepted ladder rung above 1x, else (None, the prose)."""
-        for k in ("x8", "x4", "x2"):
+        """(rung key, text) of the longest accepted rung above 1x and below `key`, else (None, the prose)."""
+        for k in reversed(self.keys):
             v = versions.get(k)
-            if v and v["ok"]:
+            if 1 < self.MULT[k] < self.MULT[key] and v and v["ok"]:
                 return k, v["text"]
         return None, text
 
 
-SPECS = {"fixed": FixedLengths(), "scaled": ScaledLengths()}
+class ThoughtLengths(ScaledLengths):
+    """The thought of a think call, at the scaled family's multiples of its own length.
+
+    x0.5, and the rungs of up to THOUGHT_LADDER_MAX tokens, come from one reply with retries; every
+    longer rung is written in parts from the longest accepted rung below it (x4 from x2, x8 from x4, x32
+    from x8). The single-reply x0.5 keeps the MAX_TARGET cap; x2 / x4 / x8 go up to
+    MAX_TARGET_PARTS. x32 is clamped rather than capped: a thought whose 32x would exceed
+    THOUGHT_X32_CLAMP is written at THOUGHT_X32_CLAMP, so every thought still grows from x8 to x32.
+    """
+
+    name = "thought"
+    CAP = {
+        "x2": MAX_TARGET_PARTS,
+        "x4": MAX_TARGET_PARTS,
+        "x8": MAX_TARGET_PARTS,
+        "x32": THOUGHT_X32_CLAMP,
+    }
+    SYSTEM = THOUGHT_SYSTEM_PROMPT
+    PARTS_SYSTEM = THOUGHT_PARTS_PROMPT
+    SUBJECT = "THOUGHT"
+    NOUN = "thought"
+    LONGER = ""
+    CLOSE = "bring the reasoning to its conclusion"
+    MORE = "reason through it in more depth"
+
+    def targets(self, orig_tokens: int) -> dict[str, int]:
+        out = super().targets(orig_tokens)
+        if self.MULT["x32"] * orig_tokens > THOUGHT_X32_CLAMP:
+            out["x32"] = THOUGHT_X32_CLAMP
+        return out
+
+    def label(self, key: str, tokens: int, orig_tokens: int) -> str:
+        if round(self.MULT[key] * orig_tokens) > tokens:  # clamped
+            return f"{tokens} tokens (the most allowed; {self.MULT[key]:g} times {self.SUBJECT}'s {orig_tokens} tokens would be more)"
+        return super().label(key, tokens, orig_tokens)
+
+    def split(self, targets: dict[str, int]) -> tuple[dict[str, int], list[str]]:
+        ladder = {
+            k: t
+            for k, t in targets.items()
+            if k == "x0.5" or (k in self.LADDER and t <= THOUGHT_LADDER_MAX)
+        }
+        return ladder, [k for k in self.keys if k in targets and k not in ladder]
+
+    def block(self, text: str, call: str) -> str:
+        """`text` is the thought, `call` the whole think call (for its summary)."""
+        m = SUMMARY.search(call)
+        summary = m.group(1).strip() if m else ""
+        return f"THOUGHT:\n{_clip(text, MAX_TEXT_CHARS, 2000)}\n\nSUMMARY:\n{summary or '(none)'}"
+
+
+SPECS = {
+    "fixed": FixedLengths(),
+    "scaled": ScaledLengths(),
+    "thought": ThoughtLengths(),
+}
 Spec = FixedLengths | ScaledLengths
 
 
@@ -277,7 +403,7 @@ def system_prompt(
         for lo, hi in [band(t, tolerance)]
     )
     form = "{" + ", ".join(f'"{k}": "..."' for k in targets) + "}"
-    return SYSTEM_PROMPT.format(
+    return spec.SYSTEM.format(
         n=("one", "two", "three", "four")[len(targets) - 1],
         order=spec.order_rule(list(targets)),
         wpt=WORDS_PER_TOKEN,
@@ -308,7 +434,7 @@ def first_round_messages(
             "role": "system",
             "content": system_prompt(spec, targets, count_tokens(text), tolerance),
         },
-        {"role": "user", "content": turn_block(text, call)},
+        {"role": "user", "content": spec.block(text, call)},
     ]
 
 
@@ -345,7 +471,7 @@ def retry_messages(
                 min_words = round(lo / ratio)
                 why = (
                     f"your previous attempt had {w} words = {n} tokens, too SHORT (about {max(want - w, 1)} words missing); "
-                    f"anything under {min_words} words will be rejected again, so say more about what this step examines and what I expect to learn"
+                    f"anything under {min_words} words will be rejected again, so {spec.MORE}"
                 )
             else:
                 # a gentle cut: models drop dense identifiers when condensing, so an aggressive cut lands under the band
@@ -358,7 +484,7 @@ def retry_messages(
         asked += [f"{k}_a", f"{k}_b"]
     keys = ", ".join(f'"{k}"' for k in asked)
     user = (
-        f"{turn_block(text, call)}\n\nSOURCE (the version to condense or expand):\n{source}\n\n"
+        f"{spec.block(text, call)}\n\nSOURCE (the version to condense or expand):\n{source}\n\n"
         + RETRY_INSTRUCTIONS.format(items="\n".join(items), keys=keys)
     )
     return [
@@ -390,20 +516,22 @@ def parts_messages(
     `note` is a sentence about the previous reply (why it was unusable, or that it came out short).
     """
     times = f"{spec.MULT[source_key]:g}-times" if source_key else ""
+    subject, noun = spec.SUBJECT, spec.NOUN
     source_clause = (
-        f", plus SOURCE, an earlier {times} elaboration of TEXT that this commentary elaborates further"
+        f", plus SOURCE, an earlier {times} elaboration of {subject} that this {noun} elaborates further"
         if source_key and not sofar
         else ""
     )
-    system = PARTS_PROMPT.format(
+    system = spec.PARTS_SYSTEM.format(
         source_clause=source_clause,
         label=spec.label(key, target, orig_tokens),
+        longer=spec.LONGER,
         wpt=WORDS_PER_TOKEN,
         struct=struct_of(chunk, parts=True),
     )
-    user = turn_block(text, call)
+    user = spec.block(text, call)
     if source_key and not sofar:
-        user += f"\n\nSOURCE ({times} TEXT's length):\n{source}"
+        user += f"\n\nSOURCE ({times} {subject}'s length):\n{source}"
     if sofar:
         user += (
             f"\n\nWRITTEN SO FAR ({sofar_tokens} of the {target} tokens):\n"
@@ -411,11 +539,11 @@ def parts_messages(
         )
     shape = shape_of(chunk, parts=True)
     if not sofar and final:
-        ask = f"Write the whole commentary now: {shape}."
+        ask = f"Write the whole {noun} now: {shape}."
     elif not sofar:
         ask = f"Write the opening part now: {shape}. More parts will follow, so do not wrap up or conclude."
     elif final:
-        ask = f"Write the final part now: {shape}, and bring the commentary to a close that leads into the tool call."
+        ask = f"Write the final part now: {shape}, and {spec.CLOSE}."
     else:
         ask = f"Write the next part now: {shape}. More parts will follow, so do not wrap up or conclude."
     if note:

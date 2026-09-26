@@ -1,23 +1,28 @@
-"""Rephrase every non-think assistant turn of a trajectory dataset at several text lengths.
+"""Rephrase the assistant turns of a trajectory dataset at several text lengths.
 
-Each row is reduced to its skeleton (trajectory.py) and every assistant turn other than think /
-task_tracker becomes one work unit. One request asks for all versions of a family (llm.py):
-  --family fixed    ~300 / ~100 / ~50 / ~20 student-model tokens
-  --family scaled   0.5x / 2x / 4x / 8x of the turn's own prose length (multiples whose target
-                    is under 4 or over 2000 tokens, and every multiple of an empty turn, are not
-                    requested), plus 32x written afterwards in parts (cap 8000 tokens)
-Versions outside the ±25 % band are re-requested with the measured count as feedback, for at
-most --max-rounds rounds. A version still outside the band after that falls back to the
-turn's original text. A version written in parts (32x) instead grows until it reaches the
-band: each request sees the text so far and writes the next part; an overshoot is trimmed at
-a sentence boundary.
+Each row is reduced to its skeleton (trajectory.py); the work units depend on the family:
+  --family fixed    every turn other than think / task_tracker: its prose at ~300 / ~100 / ~50 /
+                    ~20 student-model tokens
+  --family scaled   the same turns: 0.5x / 2x / 4x / 8x of the turn's own prose length
+                    (multiples whose target is under 4 or over 2000 tokens, and every multiple of
+                    an empty turn, are not requested), plus 32x written afterwards in parts (cap
+                    8000 tokens)
+  --family think    think turns only (the other turns' prose is the scaled family's): the prose
+                    before the call as in `scaled` (field "text"), and the call's thought at the
+                    same multiples of its own length (field "thought"; llm.ThoughtLengths)
+Versions written in one reply that fall outside the ±25 % band are re-requested with the
+measured count as feedback, for at most --max-rounds rounds; one still outside the band after
+that falls back to the original text. A version written in parts (32x; a thought's longer
+rungs) instead grows until it reaches the band: each request sees the text so far and writes
+the next part; an overshoot is trimmed at a sentence boundary.
 
 Output: <out-dir>/<dataset>.<family>[.<keys>].jsonl, one line per unit:
-  {"instance_id", "msg_idx", "tool", "orig_text", "orig_tokens", "family", "targets", "rounds",
+  {"instance_id", "msg_idx", "field", "tool", "orig_text", "orig_tokens", "family", "targets", "rounds",
    "versions": {key: {"text", "tokens", "ok", "round"}, ...},  # ok=False: fell back to orig_text
    "fallback": [keys that fell back], "skipped": [keys not requested],
    "usage", "rounds_log", "elapsed", "model", "error"?}
-Units already present without "error" are skipped on restart, so a killed run resumes.
+("family" is the unit's length spec: fixed / scaled / thought.) Units already present without
+"error" are skipped on restart, so a killed run resumes.
 
 Usage:
   python tools/verbosity_rephrase/rephrase.py --family scaled \
@@ -62,7 +67,7 @@ from llm import (
     retry_messages,
 )  # noqa: E402
 from tokens import count_tokens  # noqa: E402
-from trajectory import build_skeleton  # noqa: E402
+from trajectory import build_skeleton, thought_of  # noqa: E402
 
 
 RETRY_TEMPERATURE = 0.7  # warmer than round 1 so the two retry candidates differ
@@ -75,6 +80,11 @@ PARTS_GAIN = (
 PARTS_MIN_PLAIN = 20  # tokens; a reply without the JSON wrapper counts as the part when it is at least this long
 _SENT_END = re.compile(r"(?<=[.!?:])\s+")
 _SENT_END_STRICT = re.compile(r"(?<=[.!?])\s+")  # a cut part must not end on a colon
+_SENT_SPLIT = re.compile(r"((?<=[.!?])\s+)")  # keeps the separators
+MIN_REPEAT_CHARS = 40  # shorter sentences ("Let me check.") may legitimately recur
+PARTS_MIN_NEW = (
+    0.5  # a part that loses more than this share of its tokens to repeats is a restart
+)
 _PART_LABEL = re.compile(
     r"^\s*(?:\*\*)?part\s*\d+\s*(?:of\s*\d+)?\s*(?:\*\*)?\s*[:.\-\u2013\u2014]\s*",
     re.IGNORECASE,
@@ -84,21 +94,46 @@ _PLAIN_LEAD = re.compile(
 )
 
 
-def dataset_units(rows, limit: int = 0, sample: int = 0, seed: int = 0) -> list[dict]:
-    """Flatten rows into work units; `limit` caps the rows, `sample` picks random units (probing)."""
+FAMILIES = ("fixed", "scaled", "think")
+
+
+def unit_key(v: dict) -> tuple[str, int, str]:
+    return v["instance_id"], v["msg_idx"], v.get("field", "text")
+
+
+def dataset_units(
+    rows, family: str, limit: int = 0, sample: int = 0, seed: int = 0
+) -> list[dict]:
+    """Flatten rows into work units (see the module docstring); `limit` caps the rows, `sample` picks random units (probing).
+
+    A unit's `spec` names its length spec in llm.SPECS; a thought unit's `text` is the thought and its `call` the whole think call.
+    """
     units: list[dict] = []
     for n_rows, row in enumerate(rows, 1):
-        sk = build_skeleton(row["messages"])
+        if family == "think":
+            sk = build_skeleton(row["messages"], think="split", plan="keep")
+        else:
+            sk = build_skeleton(row["messages"])
         for idx, t in sk.turns.items():
-            units.append(
-                {
-                    "instance_id": row["instance_id"],
-                    "msg_idx": idx,
-                    "tool": t.tool,
-                    "text": t.text,
-                    "call": t.call,
-                }
-            )
+            if family == "think" and t.tool != "think":
+                continue
+            unit = {
+                "instance_id": row["instance_id"],
+                "msg_idx": idx,
+                "tool": t.tool,
+                "call": t.call,
+            }
+            spec = "scaled" if family == "think" else family
+            units.append({**unit, "field": "text", "spec": spec, "text": t.text})
+            if family == "think":
+                units.append(
+                    {
+                        **unit,
+                        "field": "thought",
+                        "spec": "thought",
+                        "text": thought_of(t.call),
+                    }
+                )
         if n_rows == limit:
             break
     if sample and sample < len(units):
@@ -158,10 +193,14 @@ def part_of_reply(raw: str, finish: str | None, sofar: str) -> tuple[str | None,
 
 
 def clean_part(part: str, sofar: str) -> str | None:
-    """Strip a 'Part N:' label and any re-emitted tail of the text so far; None for an empty part or a restart.
+    """Strip a 'Part N:' label, any re-emitted tail of the text so far and repeated sentences; None for an empty part or a restart.
 
     The model often repeats the last sentence or two before continuing; that overlap is dropped.
     A part that begins with text from earlier in `sofar` and never reaches its end is a restart.
+    Deep into a long version (it sees only the head and tail of `sofar`) the model also re-emits
+    earlier sentences mid-part: those are dropped, and a part that was mostly such repeats is a
+    restart too. (Family B's x32 had only the first two rules; 16.5 % of the sentences of its
+    claude45 versions over 4000 tokens are verbatim repeats.)
     """
     part = _PART_LABEL.sub("", part).strip()
     if not part:
@@ -176,7 +215,33 @@ def clean_part(part: str, sofar: str) -> str | None:
         else:
             if len(part) > 80 and part[:80] in sofar:
                 return None
-    return part or None
+    kept = drop_repeats(part, sofar)
+    if count_tokens(kept) < max(PARTS_MIN_PLAIN, PARTS_MIN_NEW * count_tokens(part)):
+        return None
+    return kept
+
+
+def drop_repeats(part: str, sofar: str) -> str:
+    """`part` without the sentences (outside code blocks) that `sofar` or the part itself already has verbatim."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for i, seg in enumerate(part.split("```")):
+        if i % 2:  # inside a code block
+            out.append(seg)
+            continue
+        pieces = _SENT_SPLIT.split(seg)  # sentence, separator, sentence, ...
+        kept: list[str] = []
+        for j in range(0, len(pieces), 2):
+            sent, sep = pieces[j], pieces[j + 1] if j + 1 < len(pieces) else ""
+            s = sent.strip()
+            if len(s) >= MIN_REPEAT_CHARS and (s in sofar or s in seen):
+                if "\n" in sep and kept:  # keep the paragraph break
+                    kept[-1] = sep
+                continue
+            seen.add(s)
+            kept += [sent, sep]
+        out.append("".join(kept))
+    return "```".join(out).strip()
 
 
 def plain_part(raw: str) -> str | None:
@@ -199,16 +264,18 @@ def write_in_parts(
     source_key: str | None,
     source: str,
     tolerance: float,
+    start: str = "",
 ) -> tuple[dict, dict, list[dict], str | None]:
     """Grow one version part by part until it reaches its band (or the calls run out).
 
     Each request asks for the next `chunk` tokens, an even share of what is left in parts of at most
     PART_MAX; a truncated reply keeps its complete sentences; an unusable reply is re-asked warmer.
+    `start` is text already written (topping up a version that came out short), continued as is.
     Returns (version, usage, log, api error).
     """
     lo, hi = band(target, tolerance)
-    parts: list[str] = []
-    total = 0
+    parts: list[str] = [start] if start else []
+    total = count_tokens(start)
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
     log: list[dict] = []
     max_calls = math.ceil(target / PART_MAX) + 3
@@ -309,7 +376,7 @@ def process_unit(
     tolerance: float,
     keys: tuple[str, ...] | None = None,
 ) -> dict:
-    """Write the unit's versions: the ladder keys in one reply (with retries), then the parts keys.
+    """Write the unit's versions: the ladder keys in one reply (with retries), then the parts keys in order.
 
     `keys` restricts the work to a subset of the family's keys; `unit["prior"]` (a record of an
     earlier run) supplies the ladder rungs the parts keys grow from and is merged into the output.
@@ -320,7 +387,7 @@ def process_unit(
     targets = spec.targets(orig_tokens)
     if keys is not None:
         targets = {k: t for k, t in targets.items() if k in keys}
-    ladder = {k: t for k, t in targets.items() if k in spec.LADDER}
+    ladder, parts = spec.split(targets)
     prior: dict | None = unit.get("prior")
     versions: dict[str, dict] = {
         k: v for k, v in (prior or {}).get("versions", {}).items() if v["ok"]
@@ -413,10 +480,10 @@ def process_unit(
                 failing.pop(k)
             else:
                 failing[k] = (versions[k]["tokens"], len(versions[k]["text"].split()))
-    for k in spec.PARTS:
-        if k not in targets or err or not isinstance(spec, ScaledLengths):
-            continue
-        source_key, source = spec.parts_source(text, versions)
+    for k in parts:
+        if err or not isinstance(spec, ScaledLengths):
+            break
+        source_key, source = spec.parts_source(k, text, versions)
         versions[k], usage, log, err = write_in_parts(
             rp,
             spec,
@@ -436,6 +503,7 @@ def process_unit(
     out = {
         "instance_id": unit["instance_id"],
         "msg_idx": unit["msg_idx"],
+        "field": unit["field"],
         "tool": unit["tool"],
         "orig_text": text,
         "orig_tokens": orig_tokens,
@@ -479,9 +547,9 @@ def process_unit(
     return out
 
 
-def load_records(path: Path) -> dict[tuple[str, int], dict]:
+def load_records(path: Path) -> dict[tuple[str, int, str], dict]:
     """Error-free records by unit; a later line for the same unit wins."""
-    out: dict[tuple[str, int], dict] = {}
+    out: dict[tuple[str, int, str], dict] = {}
     if not path.exists():
         return out
     with path.open() as fh:
@@ -491,11 +559,11 @@ def load_records(path: Path) -> dict[tuple[str, int], dict]:
             except ValueError:
                 continue  # torn last line of a killed run
             if not v.get("error"):
-                out[(v["instance_id"], v["msg_idx"])] = v
+                out[unit_key(v)] = v
     return out
 
 
-def load_done(path: Path) -> set[tuple[str, int]]:
+def load_done(path: Path) -> set[tuple[str, int, str]]:
     return set(load_records(path))
 
 
@@ -525,7 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--hf-split", default="train")
     p.add_argument("--out-dir", required=True)
-    p.add_argument("--family", choices=list(SPECS), default="fixed")
+    p.add_argument("--family", choices=FAMILIES, default="fixed")
     p.add_argument(
         "--keys",
         default=None,
@@ -593,10 +661,10 @@ def main() -> None:
         sys.exit("error: no API key (--api-key / LLM_API_KEY / config.toml)")
     from datasets import load_dataset
 
-    spec = SPECS[args.family]
+    all_keys = SPECS["scaled" if args.family == "think" else args.family].keys
     keys = tuple(k for k in args.keys.split(",") if k) if args.keys else None
-    if keys and any(k not in spec.keys for k in keys):
-        sys.exit(f"error: --keys must be among {spec.keys}")
+    if keys and any(k not in all_keys for k in keys):
+        sys.exit(f"error: --keys must be among {all_keys}")
     prior = load_records(Path(args.prior)) if args.prior else None
     limiter = (
         AdaptiveLimiter(
@@ -621,11 +689,12 @@ def main() -> None:
     for repo in args.hf:
         label = repo.split("/")[-1]
         suffix = f".{'+'.join(keys)}" if keys else ""
-        out_path = out_dir / f"{label}.{spec.name}{suffix}.jsonl"
+        out_path = out_dir / f"{label}.{args.family}{suffix}.jsonl"
         if args.no_resume and out_path.exists():
             out_path.unlink()
         units = dataset_units(
             load_dataset(repo, split=args.hf_split),
+            args.family,
             limit=args.limit,
             sample=args.sample,
             seed=args.seed,
@@ -633,17 +702,17 @@ def main() -> None:
         if prior is not None:
             missing = 0
             for u in units:
-                u["prior"] = prior.get((u["instance_id"], u["msg_idx"]))
+                u["prior"] = prior.get(unit_key(u))
                 missing += u["prior"] is None
             if missing:
                 sys.exit(
                     f"error: {missing} turns have no record in --prior {args.prior}"
                 )
         done = load_done(out_path)
-        pending = [u for u in units if (u["instance_id"], u["msg_idx"]) not in done]
+        pending = [u for u in units if unit_key(u) not in done]
         print(
             f"\n{label}: {len(units)} turns, {len(done)} done, {len(pending)} pending "
-            f"(family={spec.name}, keys={','.join(keys) if keys else 'all'}, model={args.model}, "
+            f"(family={args.family}, keys={','.join(keys) if keys else 'all'}, model={args.model}, "
             f"workers={args.workers}"
             + (
                 f" adaptive[{args.workers_min}..{args.workers}, start {limiter.cap}]"
@@ -661,7 +730,13 @@ def main() -> None:
         ):
             futs = [
                 ex.submit(
-                    process_unit, rp, spec, u, args.max_rounds, args.tolerance, keys
+                    process_unit,
+                    rp,
+                    SPECS[u["spec"]],
+                    u,
+                    args.max_rounds,
+                    args.tolerance,
+                    keys,
                 )
                 for u in pending
             ]
