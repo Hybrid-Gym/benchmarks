@@ -9,6 +9,7 @@ controlled length. Three families, plus a rebuild of A:
 | A `fixed` | `_text0`, `_text20`, `_text50`, `_text100`, `_text300` | removed, with their result turns | none, or ~20 / 50 / 100 / 300 tokens for every turn |
 | B `scaled` | `_text0x`, `_text0.5x`, `_text2x`, `_text4x`, `_text8x`, `_text32x` | kept verbatim | none, or ½ / 2 / 4 / 8 / 32 × the turn's **own** prose length |
 | A+ `withthink` | `_text20_withthink`, `_text50_withthink`, `_text100_withthink`, `_text300_withthink` | kept verbatim | family A's text: ~20 / 50 / 100 / 300 tokens for every turn |
+| D `textcov` (claude45 only) | `_textcov0`, `_textcov20`, `_textcov40`, `_textcov60`, `_textcov80`, `_textcov100` | kept verbatim | the original prose, on 0-100 % of the turns (40 % = the base) |
 | C `think` | `_text0x_think0x`, `_text0.5x_think0.5x`, `_text2x_think2x`, `_text4x_think4x`, `_text8x_think8x`, `_text32x_think32x` | task_tracker kept verbatim; think turns rephrased (their prose and their `thought`), removed at 0× | family B's prose, plus each think turn's prose and thought at the same multiple of their own lengths |
 
 Sources: `synthetic-code-training/func_localize_claude45_1457i` and
@@ -128,6 +129,8 @@ content"): family B plus the `think` turns.
 | `llm.py` | the three length specs (fixed, scaled, thought), the prompts (first round + retry + parts), reply parsing, gateway client with backoff and adaptive in-flight cap |
 | `rephrase.py` | the LLM driver: one work unit per non-think assistant turn (family think: two per think turn), per-request `max_tokens`, resumable jsonl output; `--keys x32 --prior <jsonl>` adds the parts-written rung to a finished run |
 | `build_variants.py` | assemble a family's variants, validate, save to disk, push with a dataset card |
+| `fill_prose.py` | write a comment for every empty turn, one request per trajectory (family D) |
+| `build_coverage.py` | build / validate / push the `_textcov<N>` levels from the base and the fills |
 | `dedupe_parts.py` | remove repeated sentences from one rung of a finished run, topping up versions that fall under their band |
 | `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, `FAMILY=fixed|scaled|think`, `KEYS` for a subset of rungs / the added x32 rung, re-entrant |
 
@@ -264,6 +267,34 @@ byte, and `_text0` with the think turns kept is byte-identical to `_text0x`, so 
 twin. Beyond the length rule, A+ and B differ in one more way: A gives turns without prose (60 % of
 claude45's) prose explaining the call, B leaves them empty. Family A has no repeat problem (every
 version is written in one reply: 0.02 % / 0.01 % repeated sentences in `t300`, none below it).
+
+Family D `textcov` (2026-09-27, Gaokai; `fill_prose.py` + `build_coverage.py`): the share of turns with
+prose as the only variable. 40 % of claude45's non-think turns carry prose (10 513 of 26 194; mean 38.7,
+median 23 tokens) and 60 % carry none. `_textcov0` removes all of it (the same trajectories as
+`_text0x`), `_textcov20` a random half, `_textcov40` is the base, and `_textcov60/80/100` add comments to a
+random 1/3, 2/3 or all of the empty turns. The random orders are drawn once (seed 0), so the levels are
+nested, and the kept prose is always the original. The comments are written once for every empty turn
+(`fill_prose.py`), **one request per trajectory** instead of one per turn: the model sees the whole run
+(task, every step with its comment or call, every result; results clipped to 1 500 characters, calls to
+1 200, the agent's system prompt left out; median 11K prompt tokens) with the empty steps marked and
+returns all their comments as one JSON object, re-asked for any it leaves out. There is no length
+target; the prompt asks for the tone and length of the agent's own comments in the run and forbids
+anything the agent could not know yet (the call's result, later steps). Smoke test: mean 20 / median 19
+tokens, 0 of 34 comments naming an identifier first shown after their step. The endpoint answers such a
+request in ~1.5 s, so the 1 457 trajectories take minutes, not hours.
+
+The full run (2026-09-27) showed that seeing the whole run does leak: 0.7 % of the first 8 216 comments
+named something the trajectory shows only after their step ("Found the aztec_sandpile function" before
+the search that finds it). `fill_prose.py` therefore checks every comment for identifiers (backticked
+text, paths, snake_case, CamelCase) that appear only after its step, and writes a flagged one again
+from the run cut off right after that step's call, where it cannot leak. Result: 15 681 comments for
+15 681 empty turns, 0 missing, 117 (0.75 %) rewritten, mean 17.8 / median 17 tokens (the agent's own
+prose: 38.7 / 23). The heuristic still flags 8 of the rewritten ones, all names the model knows from
+elsewhere (SageMath, OpenMPI, functions of well-known libraries), not from the trajectory; a leak that
+names nothing ("the search found it") is not caught. The six datasets were validated fresh from HF:
+coverage 0.0 / 20.1 / 40.1 / 60.1 / 80.0 / 100.0 %, every level's prose contained, unchanged, in the
+next, kept prose identical to the base, `_textcov0` = `_text0x`, `_textcov40` = the base, `think` /
+`task_tracker` turns and every tool call and result byte-identical.
 
 `dedupe_parts.py` (2026-09-26) removed the repeated sentences from family B's x32 rung after the fact
 (see Family C, 5.): each accepted x32 version loses its repeated sentences; one that falls under its
