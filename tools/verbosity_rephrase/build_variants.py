@@ -4,8 +4,10 @@ Four families, one HF dataset per variant, named <base>_<variant>:
   fixed   think / task_tracker turns and their results removed
     text0                  every assistant turn is its tool call only (no LLM involved)
     text20/50/100/300      prose rephrased to ~N tokens + the tool call
-  withthink  the fixed family's prose with think / task_tracker turns kept verbatim (no LLM involved;
-    text20..300_withthink  its text0 would be the scaled family's text0x, so it has none)
+  withthink  the fixed family's prose with think / task_tracker turns kept verbatim (no LLM involved)
+    text0_withthink        every other assistant turn is its tool call only: byte-identical to the
+                           scaled family's text0x, published under this name to complete the series
+    text20..300_withthink  the fixed family's text20..300 with the think / task_tracker turns kept
   scaled  think / task_tracker turns kept verbatim
     text0x                 every other assistant turn is its tool call only (no LLM involved)
     text0.5x/2x/4x/8x/32x  prose rephrased to N x its own length + the tool call (32x written
@@ -113,6 +115,7 @@ FAMILIES = {
     ),
     "withthink": Family(
         {
+            "text0_withthink": None,
             "text20_withthink": "t20",
             "text50_withthink": "t50",
             "text100_withthink": "t100",
@@ -353,13 +356,14 @@ def card(
             )
     elif family == "withthink":
         construction = (
-            "Construction (shared by the `_text20/50/100/300_withthink` siblings): the prose of every turn is the very\n"
-            "same rewritten text as in the `_text20/50/100/300` siblings, but the `think` and `task_tracker` turns (the\n"
-            "thinking/planning steps) are kept verbatim instead of removed, as in the `_text0x/0.5x/2x/4x/8x/32x` siblings\n"
-            "(`_text0` with them kept is `_text0x`). The system prompt, task, tool calls and tool results are byte-identical\n"
-            "to the base. The rephraser saw only the current turn (its prose + its tool call); the ~300-token version was\n"
-            "written first and condensed to 100/50/20 in the same response so the four lengths share one meaning. Turns\n"
-            "with no original prose received prose explaining their tool call."
+            "Construction (shared by the `_text0/20/50/100/300_withthink` siblings): the prose of every turn is the very\n"
+            "same text as in the `_text0/20/50/100/300` siblings, but the `think` and `task_tracker` turns (the\n"
+            "thinking/planning steps) are kept verbatim instead of removed, as in the `_text0x/0.5x/2x/4x/8x/32x` siblings.\n"
+            "`_text0_withthink` is therefore byte-identical to `_text0x`, published under this name to complete the series.\n"
+            "The system prompt, task, tool calls and tool results are byte-identical to the base. The rephraser saw only\n"
+            "the current turn (its prose + its tool call); the ~300-token version was written first and condensed to\n"
+            "100/50/20 in the same response so the four lengths share one meaning. Turns with no original prose received\n"
+            "prose explaining their tool call."
         )
         table_extra = ""
     elif family == "fixed":

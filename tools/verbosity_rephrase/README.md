@@ -8,7 +8,7 @@ controlled length. Three families, plus a rebuild of A:
 |---|---|---|---|
 | A `fixed` | `_text0`, `_text20`, `_text50`, `_text100`, `_text300` | removed, with their result turns | none, or ~20 / 50 / 100 / 300 tokens for every turn |
 | B `scaled` | `_text0x`, `_text0.5x`, `_text2x`, `_text4x`, `_text8x`, `_text32x` | kept verbatim | none, or ½ / 2 / 4 / 8 / 32 × the turn's **own** prose length |
-| A+ `withthink` | `_text20_withthink`, `_text50_withthink`, `_text100_withthink`, `_text300_withthink` | kept verbatim | family A's text: ~20 / 50 / 100 / 300 tokens for every turn |
+| A+ `withthink` | `_text0_withthink` (= `_text0x`), `_text20_withthink`, `_text50_withthink`, `_text100_withthink`, `_text300_withthink` | kept verbatim | none, or family A's text: ~20 / 50 / 100 / 300 tokens for every turn |
 | D `textcov` (claude45 only) | `_textcov0`, `_textcov20`, `_textcov40`, `_textcov60`, `_textcov80`, `_textcov100` | kept verbatim | the original prose, on 0-100 % of the turns (40 % = the base) |
 | C `think` | `_text0x_think0x`, `_text0.5x_think0.5x`, `_text2x_think2x`, `_text4x_think4x`, `_text8x_think8x`, `_text32x_think32x` | task_tracker kept verbatim; think turns rephrased (their prose and their `thought`), removed at 0× | family B's prose, plus each think turn's prose and thought at the same multiple of their own lengths |
 
@@ -263,8 +263,9 @@ Family A+ `withthink` (2026-09-26, Gaokai: add the thinking/planning steps back 
 so that they differ from the `_text<N>x` datasets only in token counts and in the way the prose was
 rewritten): no LLM calls, family A's rephrase jsonl rebuilt with `think` / `task_tracker` turns kept
 verbatim, pushed as new datasets. Removing their think turns gives back `_text20` … `_text300` byte for
-byte, and `_text0` with the think turns kept is byte-identical to `_text0x`, so it has no `_withthink`
-twin. Beyond the length rule, A+ and B differ in one more way: A gives turns without prose (60 % of
+byte, and `_text0` with the think turns kept is byte-identical to `_text0x`; it is published as
+`_text0_withthink` too (2026-09-27, Gaokai: complete the series under one naming scheme), and its card
+says it is the same data as `_text0x`. Beyond the length rule, A+ and B differ in one more way: A gives turns without prose (60 % of
 claude45's) prose explaining the call, B leaves them empty. Family A has no repeat problem (every
 version is written in one reply: 0.02 % / 0.01 % repeated sentences in `t300`, none below it).
 
