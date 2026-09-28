@@ -77,7 +77,10 @@ matches add_plan's four tracker steps per trajectory.
 Each thought is one LLM request (deepseek-v4-flash, thinking off, temperature 0.3): the run up to the
 insertion point (task, every step and result, clipped), the agent's NEXT call (its own decision, so the
 thought can lead into it), the checkpoint's purpose, and two opus-4.5 thoughts of that role as style
-examples (`exemplars.json`). Nothing after the next call is shown, so a thought cannot use what the
+examples, drawn per trajectory from six per role with distinct openers (`exemplars.json`). The first
+60 trajectories of the run used the same two examples for everyone and came out formulaic (every
+strategy thought opened "The description says", every review "Let me re-read the description"), so
+the examples rotate and the prompt asks for varied openings; those 60 were rewritten. Nothing after the next call is shown, so a thought cannot use what the
 agent has not seen. Replies are rejected and asked again (up to 3 attempts, then the checkpoint is
 dropped) when they contain tool-call markup, speak about the writing task (`llm.META_PATTERNS`), are
 under 30 or over 450 words, or name an identifier that appears in the run only later

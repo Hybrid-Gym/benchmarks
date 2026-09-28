@@ -33,6 +33,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import random
 import re
 import statistics
 import sys
@@ -98,7 +99,7 @@ How this agent thinks (from runs of a strong agent on the same task):
 - After viewing code it checks the candidate against the description point by point ("it does X - yes, lines 12-15 ...") and decides whether this is the target.
 - Before editing it settles the docstring's content and format from the code and the file's conventions.
 - Before finishing it re-reads its edit against the description.
-Style: first person, present tense, plain prose with a short numbered or bulleted list where it helps; it quotes the description's words and names the concrete files, functions and line numbers it has seen; it ends with the decision that leads into the next step.
+Style: first person, present tense, plain prose with a short numbered or bulleted list where it helps; it quotes the description's words and names the concrete files, functions and line numbers it has seen; it ends with the decision that leads into the next step. Its openings vary ("Looking at ...", "I found ...", "Let me ...", "Now ...", "Based on ...", "Both candidates ...", "Interesting - ..."); it never opens two thoughts of one run the same way.
 
 Rules:
 - Use only what the run shows up to this point. Never mention a file, name, line number, result or fact that the agent has not seen yet; do not invent code or behaviour.
@@ -196,16 +197,21 @@ def ask_prompt(
     lo = min(WORDS[n][0] for n in names)
     hi = max(WORDS[n][1] for n in names)
     purpose = "; and ".join(PURPOSE[n] for n in names)
+    rng = random.Random(
+        f"{messages[1]['content'][:200]}|{idx}"
+    )  # per-trajectory choice, reproducible
     shots = "\n\n".join(
         f"Example ({ex['type']}; summary: {ex['summary']}):\n{ex['thought']}"
         for n in names
-        for ex in exemplars.get(n, [])[:2]
+        for ex in rng.sample(exemplars.get(n, []), min(2, len(exemplars.get(n, []))))
     )
     user = (
         f"{render(messages, idx)}\n\nNEXT STEP (the agent's next call, after the thought):\n"
         f"{clip(messages[idx]['content'], CALL_CHARS)}\n\n"
         f"At this point the agent pauses to {purpose}. Write that thought now.\n\n"
-        f"Examples of such thoughts from other runs on other tasks (style only; their facts do not apply here):\n\n{shots}"
+        f"Examples of such thoughts from other runs on other tasks (style only; their facts do not apply here, and "
+        f"do not copy their openings or phrasing - vary how you begin, e.g. from what you have just seen, from the "
+        f"description, from a doubt, or from a comparison of candidates):\n\n{shots}"
     )
     return SYSTEM_PROMPT.format(words_lo=lo, words_hi=hi), user
 
