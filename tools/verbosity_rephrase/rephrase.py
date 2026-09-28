@@ -624,6 +624,17 @@ def redo_plan(rec: dict, tolerance: float) -> tuple[dict, list[str], list[str]]:
         "fixed" if any(k.startswith("t") for k in rec["versions"]) else "scaled"
     )
     targets = rec.get("targets") or SPECS[family].targets(rec["orig_tokens"])
+    for k, v in {  # the merge in process_unit reads these
+        "family": family,
+        "targets": targets,
+        "fallback": [],
+        "skipped": [k for k in SPECS[family].keys if k not in targets],
+        "rounds": 0,
+        "rounds_log": [],
+        "elapsed": 0.0,
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0},
+    }.items():
+        rec.setdefault(k, v)
     redo: list[str] = []
     cleaned: list[str] = []
     for k, v in list(rec["versions"].items()):
