@@ -352,6 +352,38 @@ thoughts: every rewritten version clean, 0 fallbacks, 5 meta rejections re-asked
 is `eval_outputs/verbosity_rephrase/redo_meta.sh` (tmux `redo-meta`, logs `logs/redo_meta.log`), which
 re-pushes every rephrased variant of a (base, family) as soon as its redo finishes.
 
+Outcome for claude45 (2026-09-28): all 18 rephrased datasets re-pushed and validated fresh from HF with 0
+structural mismatches, 0 versions with reply markup and 0 with meta-language (`_text{20,50,100,300}`, their
+`_withthink` siblings, `_text{0.5x,2x,4x,8x,32x}`, `_text{0.5x,2x,4x,8x,32x}_think*`). Cost of the redo: prose
+1 027 units, thoughts 1 982 units (54.5M / 36M tokens in / out, 19K calls, 7 h alone on the gateway),
+family A 65 units. A version whose rewrite still failed after the retries keeps the original text: the 32×
+thoughts now have 277 of 3 738 originals (158 before; the 119 new ones are mostly "restarted the text"
+rejections five times in a row), the 32× prose 49 of 10 440 (18 before). An LLM-judge audit of 40 rewritten
+32× prose versions (judge sees the source, the real call and the version) found 0 invented facts and 0
+meta-language. Two more lessons: family A's records predate the `family` / `targets` fields (the redo
+infers them), and a driver must use `set -o pipefail`, otherwise a build's refusal disappears behind
+`| tee` and the log claims a push that never happened. The r2egym datasets were NOT redone: yiqing noted
+that r2egym barely uses the think tool, and the effort went to the think family of
+`func_localize_qwen35_397b_1299i` instead (below); their artifacts stand (32× prose ~13 % of turns, 2×/4× 2.4 %
+JSON tails), and `r2egym_qwen3next80b_1500i.scaled.redo.jsonl` holds 1 635 finished units if it is resumed.
+
+### Family C for `func_localize_qwen35_397b_1299i`, rewritten by its own teacher (started 2026-09-28)
+
+yiqing / Gaokai: the r2egym data barely uses the think tool, so the think family is built instead for the
+Qwen3.5-397B func-localize dataset (1 299 rows, 27 assistant turns per row, 2 576 think calls in 92 % of the
+rows, 817 task_tracker calls, 54 % of the non-think turns carry prose) and the rewriter is the teacher itself,
+`nvidia/qwen/qwen3-5-397b-a17b` (free on the gateway, reasoning off via `chat_template_kwargs.enable_thinking`),
+so the rewritten text stays in-family. Rungs x0.5 / x2 / x4 / x8 only (no 32×): variants
+`_text{0x,0.5x,2x,4x,8x}_think{same}`. Driver `eval_outputs/verbosity_rephrase/think_family_397b.sh`
+(records in `qwen35_397b/`): the scaled family for the non-think turns' prose, the think family for the think
+turns, one build. Smoke test on 2 rows: prose 2 calls per unit (the model misses the band on the first reply
+more often than deepseek-v4-flash), thoughts 6.3 calls per unit, 0 meta-language or residue, ratios
+0.53 / 1.81 / 3.73 / 8.24 (prose) and 0.61 / 2.03 / 3.93 / 7.85 (thoughts). Qwen3.5-397B also passed a
+2-row smoke as a rewriter of the claude45 data. The gateway rate-limits per source IP (a probe on an idle
+model gets instant empty-body 429s while three jobs run), so this and the other gateway jobs run one at a
+time (`queue2.sh`: this family, then the gpt5mini `add_think` synthesis, then the rewriter ablation of
+`text4x_think4x` by Opus 4.5 and by Qwen3-Next-80B, `rewriter_ablation.sh`).
+
 ## Usage
 
 ```bash
