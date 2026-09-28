@@ -618,6 +618,12 @@ def redo_plan(rec: dict, tolerance: float) -> tuple[dict, list[str], list[str]]:
     (that the original text lacks), or when cutting its JSON tail took it out of its band.
     """
     rec = {**rec, "versions": dict(rec["versions"])}
+    family = rec.get(
+        "family"
+    ) or (  # family A's records predate the "family" and "targets" fields
+        "fixed" if any(k.startswith("t") for k in rec["versions"]) else "scaled"
+    )
+    targets = rec.get("targets") or SPECS[family].targets(rec["orig_tokens"])
     redo: list[str] = []
     cleaned: list[str] = []
     for k, v in list(rec["versions"].items()):
@@ -626,7 +632,7 @@ def redo_plan(rec: dict, tolerance: float) -> tuple[dict, list[str], list[str]]:
         text = strip_json_tail(v["text"])
         if text != v["text"]:
             n = count_tokens(text)
-            lo, hi = band(rec["targets"][k], tolerance)
+            lo, hi = band(targets[k], tolerance)
             if lo <= n <= hi:
                 rec["versions"][k] = {**v, "text": text, "tokens": n, "tail_cut": True}
                 cleaned.append(k)
