@@ -77,10 +77,14 @@ matches add_plan's four tracker steps per trajectory.
 Each thought is one LLM request (deepseek-v4-flash, thinking off, temperature 0.3): the run up to the
 insertion point (task, every step and result, clipped), the agent's NEXT call (its own decision, so the
 thought can lead into it), the checkpoint's purpose, and two opus-4.5 thoughts of that role as style
-examples, drawn per trajectory from six per role with distinct openers (`exemplars.json`). The first
-60 trajectories of the run used the same two examples for everyone and came out formulaic (every
-strategy thought opened "The description says", every review "Let me re-read the description"), so
-the examples rotate and the prompt asks for varied openings; those 60 were rewritten. Nothing after the next call is shown, so a thought cannot use what the
+examples, drawn per trajectory from six per role with distinct openers (`exemplars.json`), and the
+opening words of the thought, drawn from opus-4.5's own opener distribution for that role
+(`openers.json`: strategy "The description" 29 % / "Based on" 24 % / "The function" 12 % / "I need"
+10 % ...; verify "I found" 25 % / "Looking at" 24 % / "Let me" 16 % / "Now I" 12 % ...; compose "Now I"
+55 % ...; review "Let me" 82 %). Without that draw the thoughts were formulaic: with fixed examples
+98 % of the strategy thoughts opened "The description ..." and 95 % of the verify thoughts "Looking
+at ..."; rotating the examples and asking for varied openings changed nothing. The first two full
+runs of claude47 (v1, v2) were discarded for this reason (`eval_outputs/add_think/old_v*`). Nothing after the next call is shown, so a thought cannot use what the
 agent has not seen. Replies are rejected and asked again (up to 3 attempts, then the checkpoint is
 dropped) when they contain tool-call markup, speak about the writing task (`llm.META_PATTERNS`), are
 under 30 or over 450 words, or name an identifier that appears in the run only later
@@ -91,6 +95,20 @@ cannot be determined, are left unchanged.
 Smoke test (8 claude47 rows, 4 without think): 3-4 thoughts per trajectory, 55-257 words, one
 reply re-asked for naming `sys.stdout` before the agent had seen it; about 10-17K prompt tokens and
 3-4 requests per trajectory.
+
+## Results
+
+`func_localize_claude47_add_think_1467i` (pushed 2026-09-28): 3 217 think steps added to the 914
+trajectories without one (3.52 each: 481 trajectories got 4, 427 got 3 with `verify` and `compose`
+merged, 6 got 2), 26 checkpoints dropped after three attempts, thoughts 144 words / 205 Qwen3 tokens on
+average (opus-4.5: 200 words). 92 % of the thoughts were accepted at the first attempt; none contains
+meta-language or tool-call markup; the future-leak heuristic flags 1 of 3 217 (a backticked phrase the
+model knew, not a leak). Openers follow opus-4.5's mix (strategy: "The description" 33 %, "Based on"
+24 %, "The user" 12 %, "The function" 11 %; verify: "I found" 27 %, "Looking at" 27 %, "Let me" 16 %;
+compose: "Now I" 57 %; review: "Let me" 86 %). Cost 12.8M / 0.84M tokens in / out (14K / 0.9K per
+trajectory), 80 min at ~10 trajectories per minute while sharing the gateway with another job. Validated
+fresh from HF: same columns and row order as the base, every row equals the base with its recorded think
+pairs inserted, every think call followed by the logged result.
 
 ## Usage
 
