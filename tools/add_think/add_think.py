@@ -13,7 +13,9 @@ fall at the same position are merged into one thought):
   review    right before `finish`: check the edit against the description
 The target file is the file of the last successful edit (as in training/add_plan/add_plan.py).
 
-Each thought is written from the run UP TO its position plus the agent's very next call (its own
+Each thought opens with words drawn from opus-4.5's own openers for its role (openers.json), so the
+openings are as varied as the original data's (a fixed prompt made 98 % of the strategy thoughts
+open "The description ..."), and is written from the run UP TO its position plus the agent's very next call (its own
 decision, so the thought can lead into it): nothing later is shown, so the thought cannot use what
 the agent has not yet seen. A thought that names an identifier the run only shows later, that speaks
 about the writing task instead of as the agent, or that is far off the usual length is asked for
@@ -191,7 +193,7 @@ def think_message(summary: str, thought: str) -> dict:
 
 
 def ask_prompt(
-    messages: list[dict], idx: int, names: list[str], exemplars: dict[str, list[dict]]
+    messages: list[dict], idx: int, names: list[str], exemplars: dict[str, Any]
 ) -> tuple[str, str]:
     """(system prompt, user prompt) asking for the thought of checkpoint(s) `names` before messages[idx]."""
     lo = min(WORDS[n][0] for n in names)
@@ -200,6 +202,10 @@ def ask_prompt(
     rng = random.Random(
         f"{messages[1]['content'][:200]}|{idx}"
     )  # per-trajectory choice, reproducible
+    stems = exemplars.get("_openers", {}).get(names[0], [])
+    opener = (
+        rng.choices([st for st, _ in stems], [w for _, w in stems])[0] if stems else ""
+    )
     shots = "\n\n".join(
         f"Example ({ex['type']}; summary: {ex['summary']}):\n{ex['thought']}"
         for n in names
@@ -208,7 +214,13 @@ def ask_prompt(
     user = (
         f"{render(messages, idx)}\n\nNEXT STEP (the agent's next call, after the thought):\n"
         f"{clip(messages[idx]['content'], CALL_CHARS)}\n\n"
-        f"At this point the agent pauses to {purpose}. Write that thought now.\n\n"
+        f"At this point the agent pauses to {purpose}. Write that thought now"
+        + (
+            f', beginning with the words "{opener}" and continuing naturally from them.'
+            if opener
+            else "."
+        )
+        + "\n\n"
         f"Examples of such thoughts from other runs on other tasks (style only; their facts do not apply here, and "
         f"do not copy their openings or phrasing - vary how you begin, e.g. from what you have just seen, from the "
         f"description, from a doubt, or from a comparison of candidates):\n\n{shots}"
@@ -411,6 +423,11 @@ def main() -> None:
         help="opus-4.5 thoughts by checkpoint type, shown as style examples",
     )
     p.add_argument(
+        "--openers",
+        default=str(Path(__file__).with_name("openers.json")),
+        help="opus-4.5's opening words per role with their frequencies; one is drawn per thought",
+    )
+    p.add_argument(
         "--model",
         default=os.environ.get(
             "REPHRASE_MODEL", "nvidia/deepseek-ai/deepseek-v4-flash"
@@ -439,6 +456,7 @@ def main() -> None:
     if any(c not in CHECKPOINTS for c in wanted):
         sys.exit(f"error: --checkpoints must be among {CHECKPOINTS}")
     exemplars = json.load(open(args.exemplars))
+    exemplars["_openers"] = json.load(open(args.openers))
     ds = load_dataset(args.hf, split=args.hf_split)
     assert isinstance(ds, Dataset)
     if args.limit:

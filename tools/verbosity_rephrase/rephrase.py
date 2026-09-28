@@ -80,7 +80,7 @@ from trajectory import build_skeleton, thought_of  # noqa: E402
 
 RETRY_TEMPERATURE = 0.7  # warmer than round 1 so the two retry candidates differ
 OUTPUT_HEADROOM = 2.0  # max_tokens per request = this x the tokens asked for + overhead
-PARTS_MAX_BAD = 3  # consecutive unusable part replies before a parts version gives up
+PARTS_MAX_BAD = 5  # consecutive unusable part replies before a parts version gives up (3 until 2026-09-28; the meta-language check adds rejections)
 PARTS_GAIN = (
     0.7,
     2.5,
