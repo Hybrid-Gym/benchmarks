@@ -31,6 +31,11 @@ Usage:
   # add the 32x rung to a finished scaled run (its ladder rungs are the sources; records are merged):
   python tools/verbosity_rephrase/rephrase.py --family scaled --keys x32 \
       --prior eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.scaled.jsonl ...
+  # rewrite only the versions of a finished run that speak about the rewriting task or carry reply
+  # markup (llm.META_PATTERNS / RESIDUE_PATTERNS); the other versions are kept, a trailing `"}` is
+  # just cut. Output <dataset>.<family>.redo.jsonl holds every touched unit with all its versions:
+  python tools/verbosity_rephrase/rephrase.py --family think \
+      --redo eval_outputs/verbosity_rephrase/func_localize_claude45_1457i.think.x32.jsonl ...
 """
 
 from __future__ import annotations
@@ -62,9 +67,12 @@ from llm import (
     band,
     extract_partial,
     first_round_messages,
+    meta_hits,
     parse_versions,
     parts_messages,
+    residue_hits,
     retry_messages,
+    strip_json_tail,
 )  # noqa: E402
 from tokens import count_tokens  # noqa: E402
 from trajectory import build_skeleton, thought_of  # noqa: E402
@@ -166,8 +174,24 @@ def cut_at_sentence(text: str) -> str | None:
     return text.rstrip() if re.search(r"[.!?]$", text.rstrip()) else None
 
 
-def part_of_reply(raw: str, finish: str | None, sofar: str) -> tuple[str | None, str]:
-    """(the usable part of a reply, why it is unusable): parsed, cut at a sentence if truncated, cleaned."""
+def meta_reason(text: str, orig: str, field: str = "text") -> str:
+    """Why `text` (a `field` of a unit) is unusable as the agent's words, or "" when it passes (see llm.META_PATTERNS)."""
+    if residue_hits(text):
+        return f"it contained reply markup such as {residue_hits(text)[0].strip()!r}; write the prose only"
+    hits = meta_hits(text, orig, field)
+    if hits:
+        return (
+            f'it spoke about the rewriting task ("{hits[0]}") instead of as the agent in the moment; '
+            "never mention the given text, the summary, the instructions, the parts or what you must not invent - "
+            "write only what the agent itself would say"
+        )
+    return ""
+
+
+def part_of_reply(
+    raw: str, finish: str | None, sofar: str, orig: str = "", field: str = "text"
+) -> tuple[str | None, str]:
+    """(the usable part of a reply, why it is unusable): parsed, cut at a sentence if truncated, cleaned, checked for meta-language."""
     got = parse_versions(raw, ["part"]).get("part")
     if got is None:  # cut off, or stopped without closing the object
         got = extract_partial(raw, "part")
@@ -189,6 +213,9 @@ def part_of_reply(raw: str, finish: str | None, sofar: str) -> tuple[str | None,
     got = clean_part(got, sofar)
     if got is None:
         return None, "it restarted the text instead of continuing it"
+    why = meta_reason(got, orig, field)
+    if why:
+        return None, why
     return got, ""
 
 
@@ -265,6 +292,7 @@ def write_in_parts(
     source: str,
     tolerance: float,
     start: str = "",
+    field: str = "text",
 ) -> tuple[dict, dict, list[dict], str | None]:
     """Grow one version part by part until it reaches its band (or the calls run out).
 
@@ -317,7 +345,7 @@ def write_in_parts(
         usage["calls"] += 1
         for k in ("prompt_tokens", "completion_tokens"):
             usage[k] += u.get(k) or 0
-        got, why = part_of_reply(raw, u.get("finish_reason"), sofar)
+        got, why = part_of_reply(raw, u.get("finish_reason"), sofar, text, field)
         n = count_tokens(got) if got else 0
         log.append(
             {
@@ -378,13 +406,15 @@ def process_unit(
 ) -> dict:
     """Write the unit's versions: the ladder keys in one reply (with retries), then the parts keys in order.
 
-    `keys` restricts the work to a subset of the family's keys; `unit["prior"]` (a record of an
-    earlier run) supplies the ladder rungs the parts keys grow from and is merged into the output.
+    `keys` restricts the work to a subset of the family's keys (`unit["keys"]` overrides it for one
+    unit); `unit["prior"]` (a record of an earlier run) supplies the ladder rungs the parts keys grow
+    from and is merged into the output.
     """
     t0 = time.time()
     text, call = unit["text"], unit["call"]
     orig_tokens = count_tokens(text)
     targets = spec.targets(orig_tokens)
+    keys = unit.get("keys", keys)
     if keys is not None:
         targets = {k: t for k, t in targets.items() if k in keys}
     ladder, parts = spec.split(targets)
@@ -395,6 +425,9 @@ def process_unit(
     failing: dict[str, tuple[int, int]] = {
         k: (0, 0) for k in ladder
     }  # key -> (tokens, words) of that attempt
+    notes: dict[
+        str, str
+    ] = {}  # key -> why its last attempt was rejected for its content
     usage_total = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
     rounds_log: list[dict] = []
     rounds = 0
@@ -416,6 +449,7 @@ def process_unit(
                 spec.source(text, versions),
                 failing,
                 tolerance,
+                notes,
             )
             keys_asked = [f"{k}_{c}" for k in base_keys for c in "ab"]
         asked = sum(ladder[k] for k in base_keys) * (1 if rnd == 1 else 2)
@@ -448,9 +482,16 @@ def process_unit(
         )
         for k in base_keys:
             cands = [got[c] for c in (k, f"{k}_a", f"{k}_b") if c in got]
+            rejected = [meta_reason(v, text, unit["field"]) for v in cands]
+            cands = [v for v, why in zip(cands, rejected, strict=True) if not why]
             if not cands:
                 failing[k] = (0, 0)
+                notes[k] = (
+                    f"your previous attempt was rejected because {next(filter(None, rejected), 'it was missing or invalid')}"
+                )
+                cand_tokens[k] = []
                 continue
+            notes.pop(k, None)
             lo, hi = band(ladder[k], tolerance)
             mid = (lo + hi) / 2
             for v in cands:
@@ -495,6 +536,7 @@ def process_unit(
             source_key,
             source,
             tolerance,
+            field=unit["field"],
         )
         usage_total["calls"] += usage["calls"]
         for f in ("prompt_tokens", "completion_tokens"):
@@ -518,6 +560,8 @@ def process_unit(
         "elapsed": round(time.time() - t0, 2),
         "model": rp.model,
     }
+    if "keys" in unit:
+        out["redo_keys"] = list(unit["keys"])
     if err:
         out["error"] = err
         return out
@@ -567,6 +611,37 @@ def load_done(path: Path) -> set[tuple[str, int, str]]:
     return set(load_records(path))
 
 
+def redo_plan(rec: dict, tolerance: float) -> tuple[dict, list[str], list[str]]:
+    """(the record with its clean versions, the keys to rewrite, the keys whose trailing `"}` was cut).
+
+    A version is rewritten when it carries reply markup or meta-language about the rewriting task
+    (that the original text lacks), or when cutting its JSON tail took it out of its band.
+    """
+    rec = {**rec, "versions": dict(rec["versions"])}
+    redo: list[str] = []
+    cleaned: list[str] = []
+    for k, v in list(rec["versions"].items()):
+        if not v["ok"]:
+            continue
+        text = strip_json_tail(v["text"])
+        if text != v["text"]:
+            n = count_tokens(text)
+            lo, hi = band(rec["targets"][k], tolerance)
+            if lo <= n <= hi:
+                rec["versions"][k] = {**v, "text": text, "tokens": n, "tail_cut": True}
+                cleaned.append(k)
+            else:
+                redo.append(k)
+                continue
+        if residue_hits(text) or meta_hits(
+            text, rec["orig_text"], rec.get("field", "text")
+        ):
+            redo.append(k)
+    for k in redo:
+        del rec["versions"][k]
+    return rec, redo, cleaned
+
+
 def load_api_key(explicit: str | None) -> str | None:
     """--api-key, else LLM_API_KEY, else the gateway key in config.toml (never printed)."""
     if explicit or os.environ.get("LLM_API_KEY"):
@@ -605,6 +680,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="rephrase jsonl of an earlier run of this family: its accepted rungs are the sources "
         "for keys written in parts, and its records are merged into the output",
+    )
+    p.add_argument(
+        "--redo",
+        default=None,
+        help="finished rephrase jsonl of this family: rewrite only its versions with meta-language or "
+        "reply markup (the rest is kept; output <dataset>.<family>.redo.jsonl)",
     )
     p.add_argument(
         "--model",
@@ -665,7 +746,10 @@ def main() -> None:
     keys = tuple(k for k in args.keys.split(",") if k) if args.keys else None
     if keys and any(k not in all_keys for k in keys):
         sys.exit(f"error: --keys must be among {all_keys}")
+    if args.redo and (args.prior or keys):
+        sys.exit("error: --redo takes neither --prior nor --keys")
     prior = load_records(Path(args.prior)) if args.prior else None
+    redo = load_records(Path(args.redo)) if args.redo else None
     limiter = (
         AdaptiveLimiter(
             start=args.workers_start or args.workers,
@@ -688,7 +772,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for repo in args.hf:
         label = repo.split("/")[-1]
-        suffix = f".{'+'.join(keys)}" if keys else ""
+        suffix = f".{'+'.join(keys)}" if keys else ".redo" if redo else ""
         out_path = out_dir / f"{label}.{args.family}{suffix}.jsonl"
         if args.no_resume and out_path.exists():
             out_path.unlink()
@@ -709,6 +793,35 @@ def main() -> None:
                     f"error: {missing} turns have no record in --prior {args.prior}"
                 )
         done = load_done(out_path)
+        if redo is not None:
+            # every unit gets a plan; units with nothing to rewrite but a cut tail are written as they are
+            n_clean = n_redo = 0
+            per_key: dict[str, int] = {}
+            kept: list[dict] = []
+            with out_path.open("a") as fh:
+                for u in list(units):
+                    rec = redo.get(unit_key(u))
+                    if rec is None or rec.get("error"):
+                        units.remove(u)  # nothing usable to redo from
+                        continue
+                    rec, redo_keys, cleaned = redo_plan(rec, args.tolerance)
+                    for k in redo_keys:
+                        per_key[k] = per_key.get(k, 0) + 1
+                    if redo_keys:
+                        u["prior"], u["keys"] = rec, tuple(redo_keys)
+                        n_redo += 1
+                        kept.append(u)
+                    else:
+                        if cleaned and unit_key(u) not in done:
+                            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                            done.add(unit_key(u))
+                        n_clean += len(cleaned)
+            units = kept
+            print(
+                f"{label}: redo {n_redo} units {dict(sorted(per_key.items()))}, "
+                f"{n_clean} versions only lost a JSON tail",
+                file=sys.stderr,
+            )
         pending = [u for u in units if unit_key(u) not in done]
         print(
             f"\n{label}: {len(units)} turns, {len(done)} done, {len(pending)} pending "
@@ -744,8 +857,9 @@ def main() -> None:
                 res = fut.result()
                 n_err += bool(res.get("error"))
                 n_ok += not res.get("error")
+                run_keys = res.get("redo_keys") or keys
                 n_fb += not res.get("error") and any(
-                    keys is None or k in keys for k in res["fallback"]
+                    run_keys is None or k in run_keys for k in res["fallback"]
                 )  # this run's keys only; a merged prior record carries its own
                 n_skip += not res["targets"]
                 fh.write(json.dumps(res, ensure_ascii=False) + "\n")

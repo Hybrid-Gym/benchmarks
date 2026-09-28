@@ -61,11 +61,189 @@ FORBIDDEN = (
     "</parameter>",
 )
 
+# Phrases that betray the rewriting task instead of the agent's own words. The rewritten thoughts of
+# family C narrated the task ("the thought doesn't mention testing, so I won't plan that", "as the
+# summary says", "I'm supposed to keep the same conclusions", "the next part of my reasoning"), and so
+# did the longest prose of family B ("the tool call I'm making is a view command"). A version or part
+# containing one of these that the unit's original text does not also contain is rejected and asked
+# for again, with the reason. Precision matters more than recall: a docstring's "summary line", "the
+# next part of the task", a doctest "prompt", "the original wording" of a removed docstring, "the
+# source text" a parser reads, "I'm rewriting the condition" or "inventory" are the agent's own words
+# and must pass. Each pattern applies to the listed fields ("text" = prose, "thought" = a think call's
+# thought): a thought legitimately discusses its docstring's "summary", prose has no such summary.
+_ALL = ("text", "thought")
+META_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        re.compile(
+            r"(?<![.\w`])(THOUGHT|TEXT|SOURCE|SUMMARY|WRITTEN SO FAR|TOOL CALL)\b"
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\bthe thought\b(?! (of|that|process|experiment|behind|occurs|occurred|crossed))",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\b(the|this) (rewritten thought|original thought|given thought|marked step|tool call)\b|"
+            r"\b(expanded|condensed|shorter|longer|rewritten) version of (the|this|my) (thought|text|reasoning|commentary)\b|"
+            r"\bparaphrase of the (thought|text)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\b(the|this) summary (says|states|mentions|confirms|parameter|notes|indicates|describes|frames|calls|"
+            r"refers|labels|itself|already|explicitly|only|gives|tells|suggests|hints|emphasizes|highlights|captures|"
+            r"reads|provided|given|of (the|this) (tool call|step|call))\b|\b(as|per) the summary\b(?! line)",
+            re.I,
+        ),
+        ("text",),
+    ),
+    (
+        re.compile(
+            r"\b(the|this) summary (parameter|says to|tells (me )?to|for this step|of this (step|tool call|call)|"
+            r"only mentions|explicitly says)\b|\bas the summary (says|states|notes|puts|frames|labels)\b|"
+            r"\bthe scope of this summary\b",
+            re.I,
+        ),
+        ("thought",),
+    ),
+    (
+        re.compile(
+            r"\b(the|these|those|your) (instructions|rules|guidelines) (say|says|said|state|states|mention|mentions|"
+            r"ask|asks|tell|tells|require|requires|forbid|forbids|specify|specifies|instruct|instructs|indicate|"
+            r"call for|are clear|explicitly)\b|\bas instructed\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\b(next|final|first|second|last|opening|previous|this) part of (my|the|this) "
+            r"(reasoning|commentary|thinking|thought|response|explanation|write-?up|narrative)\b|"
+            r"\b(write|writing|continue|continuing|begin|beginning|start|starting|produce|producing) the "
+            r"(next|final|opening|first|last|second) part\b|"
+            r"\bin this part(,| I| of (my|the) (commentary|reasoning|text|thought))",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\bfrom the (thought|text|summary) alone\b|\breasoning from the (thought|text)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\bI('m| am) (asked|told|instructed|supposed|expected|required) to (write|rewrite|expand|elaborate|"
+            r"produce|reason|think|stay|keep|avoid|not|only|preserve|maintain|match|continue|condense|shorten|lengthen)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\b(word|token) (count|limit|budget|target)\b|\blength (requirement|target|band|budget)\b|\b\d+ tokens\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\breach(ing)? (any )?new conclusions?\b|\bplan(ning)? (any )?different steps?\b|"
+            r"\badd(ing)? (any )?new (steps|discoveries|conclusions)\b|\bno new (facts|steps|conclusions|discoveries)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\bthe (thought|text|summary|passage|excerpt|instructions) (doesn't|does not|didn't|did not|never|only|"
+            r"explicitly|already|also|itself) (mention|say|state|specify|specifies|include|cover|address|tell|talk|"
+            r"discuss|note|indicate|describe|refer|mentions|says|states|includes|covers|addresses|tells|notes|indicates|"
+            r"describes|refers)\b|"
+            r"\bnot (mentioned|stated|specified|given|provided|covered|included|present|shown|contained) (in|by) "
+            r"(the |this |my )?(thought|text|summary|passage|excerpt)\b|"
+            r"\bbeyond the scope of (this|the) (thought|summary|text)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\bthe agent('s)? (own |next |previous |original |current )?(step|steps|reasoning|voice|thought|thoughts|"
+            r"commentary|words|intent|intention|task|goal|run|perspective)\b|"
+            r"\bthe agent (is (working|trying|looking|supposed|expected|analyzing|reasoning|about)|was doing|"
+            r"who (just|wrote|examined|made)|would|will|should|needs?|wants?|must|has to|itself)\b|"
+            r"\bwhatever (task )?the agent\b|\bme, the agent\b|\bwritten by the agent\b|\bthe assistant\b|\bas an AI\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+    (
+        re.compile(
+            r"\[WRITE COMMENT\]|\bthe marked step\b|\bstep \d+ of the (run|trajectory)\b",
+            re.I,
+        ),
+        _ALL,
+    ),
+)
+
+# Residue of the reply format: a JSON wrapper, a stray `</think>` block, a version's key. None of it is
+# ever the agent's words, so a text containing any is rejected outright (family B's pushed x2 / x4 prose
+# ended in `"}\n\n{` for 3 % of the turns, and 5-7 % of the x32 prose had `</think>{"part": "` inside).
+RESIDUE_PATTERNS = (
+    re.compile(r"</?think>"),
+    re.compile(r'\{\s*"part"|"part"\s*:'),
+    re.compile(r'"(x0\.5|x2|x4|x8|x32|t20|t50|t100|t300)(_a|_b)?"\s*:'),
+    re.compile(r"^\s*[{}]"),
+    re.compile(r"[{}]\s*$"),
+    re.compile(r'"\s*}\s*(,|\{|$|\s+")'),
+)
+_JSON_TAIL = re.compile(r'(?<=[.!?)\]`\'])\s*"\s*}\s*,?\s*\{?\s*$')
+
+
+def meta_hits(text: str, orig: str = "", field: str = "text") -> list[str]:
+    """The meta-language phrases in `text` (a `field` of a unit) that `orig`, the agent's own text, lacks."""
+    low = orig.lower()
+    out = []
+    for p, fields in META_PATTERNS:
+        if field not in fields:
+            continue
+        for m in p.finditer(text):
+            if m.group(0).lower() not in low:
+                out.append(m.group(0))
+                break
+    return out
+
+
+def residue_hits(text: str) -> list[str]:
+    return [m.group(0) for p in RESIDUE_PATTERNS for m in [p.search(text)] if m]
+
+
+def strip_json_tail(text: str) -> str:
+    """`text` without a trailing `"}` / `"}\\n\\n{` left by a reply that held two JSON objects."""
+    return _JSON_TAIL.sub("", text) if _JSON_TAIL.search(text) else text
+
+
+def after_think(raw: str) -> str:
+    """A reply without its `<think>...</think>` block(s): the text after the last `</think>`."""
+    return raw.rsplit("</think>", 1)[-1] if "</think>" in raw else raw
+
+
 RULES = """- Preserve the meaning and intent of TEXT. Do not invent facts, findings, file contents, or results that TEXT and the TOOL CALL do not state or imply. Longer versions elaborate on the same intent (what I am looking for, why this step, how it relates to the task, what I expect to learn); they never add new steps or new discoveries. Shorter versions condense the same content.
 - If TEXT is empty, write what the agent would say just before this tool call: what the call does and why it helps, based only on the call itself. The call's `summary` parameter states the agent's own intent - use it as such, never refer to "the summary"; ignore the `security_risk` parameter entirely. For the longer versions, walk through the call concretely: which file, range, pattern or command it targets and what each part is for, what output I expect to see, and what I will do with it next.
 - Do not guess what the overall task is about (bug, feature, docstring, ...) unless TEXT says so; when elaborating, stay with what this step examines or changes and what that tells the agent, rather than inventing specifics about the task or the code.
 - Write in the agent's voice: first person, present tense, addressed to no one in particular (e.g. "Let me ...", "I'll ...", "Now I need to ..."). Keep the original tone, including openers like "Great!" or "I see the issue" when TEXT has them.
-- Plain prose only. No headings, no lists unless TEXT used them, no code blocks, no XML tags, no quotation of the tool call, no meta-language about "the tool call", "the message" or these instructions."""
+- Plain prose only. No headings, no lists unless TEXT used them, no code blocks, no XML tags, no quotation of the tool call, no meta-language about "the tool call", "the message" or these instructions.
+- Write as the agent, in the moment: the output is what the agent itself says at this step, nothing else. Never refer to TEXT, the TOOL CALL, a SOURCE, the parts, the target length or these rules, and never say what TEXT does or does not mention, what you must not invent, or what you are keeping the same: the agent has never seen these instructions. Call things by their names ("this view", "the grep"), not "the tool call"."""
 
 SYSTEM_PROMPT = (
     """You rewrite the natural-language commentary that a software-engineering agent writes alongside a tool call, at controlled lengths.
@@ -87,7 +265,8 @@ Respond with ONLY a JSON object of the form {form}."""
 THOUGHT_RULES = """- Preserve the reasoning, conclusions and intent of THOUGHT. Do not invent facts, findings, file contents, code, line numbers or results that THOUGHT does not state or imply. Longer versions think the same reasoning through in more depth (what each observation means, why each alternative THOUGHT weighs is kept or ruled out, how the conclusion follows, what it implies for the next step); they never reach new conclusions, add new discoveries or plan different steps. Shorter versions condense the same reasoning and keep its conclusions and concrete references (files, functions, line numbers).
 - Keep the voice and form of THOUGHT: the agent reasoning to itself in the first person. Use lists or code only where THOUGHT does; code or text that THOUGHT quotes is reproduced exactly, never altered or extended, and quoted at most once - a shorter version may refer to a quotation instead of repeating it.
 - SUMMARY is the agent's own one-line label for this step: use it as context, never mention it.
-- No headings unless THOUGHT has them, no XML tags or tool-call markup, no meta-language about "the thought", "the summary" or these instructions."""
+- No headings unless THOUGHT has them, no XML tags or tool-call markup, no meta-language about "the thought", "the summary" or these instructions.
+- Write as the agent, in the moment: the output is the agent's own thinking at this step, nothing else. Never refer to THOUGHT, SUMMARY, a SOURCE, the parts, the target length or these rules, and never say what THOUGHT does or does not mention, what you must not invent, what you are keeping the same, or what "the agent" does: the agent has never seen these instructions and speaks of its task, the description, the code and its docstring in its own words."""
 
 THOUGHT_SYSTEM_PROMPT = (
     """You rewrite the private reasoning that a software-engineering agent records with its `think` tool between tool calls, at controlled lengths.
@@ -446,11 +625,13 @@ def retry_messages(
     source: str,
     failing: dict[str, tuple[int, int]],
     tolerance: float,
+    notes: dict[str, str] | None = None,
 ) -> Messages:
     """`failing` maps key -> (tokens, words) of the rejected attempt; (0, 0) means missing or invalid.
 
     The word count to ask for is derived from the attempt's own tokens-per-word ratio, so the
-    feedback is calibrated to this very text (code identifiers tokenize densely).
+    feedback is calibrated to this very text (code identifiers tokenize densely). `notes` gives, per
+    key, why an attempt of acceptable length was rejected (it spoke about the rewriting task).
     """
     items = []
     asked: list[str] = []
@@ -462,7 +643,7 @@ def retry_messages(
         if n == 0:
             want = words_for(target)
             alt = round(want * 1.25)
-            why = "your previous attempt was missing or invalid"
+            why = (notes or {}).get(k) or "your previous attempt was missing or invalid"
         else:
             ratio = n / max(w, 1)
             want = round(target / ratio)
@@ -574,18 +755,23 @@ def _lenient_extract(s: str, keys: list[str]) -> dict[str, str]:
     for i, m in enumerate(marks):
         end = marks[i + 1].start() if i + 1 < len(marks) else len(s)
         chunk = re.sub(
-            r'"\s*[,}]?\s*$', "", s[m.end() : end].rstrip()
-        )  # closing quote (+ `,` or `}`)
+            r'"\s*[,}]?\s*\{?\s*$', "", s[m.end() : end].rstrip()
+        )  # closing quote (+ `,` or `}`, + the `{` of a second object the model started)
         out[m.group(1)] = _unescape(chunk)
     return out
 
 
 def extract_partial(raw: str, key: str) -> str | None:
-    """The value of `key` in a reply whose JSON never closes (cut off mid-string, or the model stopped without the closing brace): everything after its opening quote, minus a trailing quote/brace."""
-    m = re.search('"' + re.escape(key) + r'"\s*:\s*"', raw or "")
-    if not m:
+    """The value of `key` in a reply whose JSON never closes (cut off mid-string, or the model stopped without the closing brace): everything after its opening quote, minus a trailing quote/brace.
+
+    The LAST occurrence of the key counts: the model sometimes drafts a value, emits `</think>` and
+    starts the object again.
+    """
+    ms = list(re.finditer('"' + re.escape(key) + r'"\s*:\s*"', after_think(raw or "")))
+    if not ms:
         return None
-    v = re.sub(r'"?\s*}?\s*(```)?\s*$', "", raw[m.end() :].rstrip())
+    m = ms[-1]
+    v = re.sub(r'"?\s*}?\s*(```)?\s*$', "", after_think(raw)[m.end() :].rstrip())
     v = _unescape(re.sub(r"\\+$", "", v)).strip()
     if not v or any(f in v for f in FORBIDDEN):
         return None
@@ -594,7 +780,7 @@ def extract_partial(raw: str, key: str) -> str | None:
 
 def parse_versions(raw: str, keys: list[str]) -> dict[str, str]:
     """Extract the requested keys from the model's reply, in reply order; missing or invalid keys are absent."""
-    s = (raw or "").strip()
+    s = after_think(raw or "").strip()
     s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
     s = re.sub(r"\n?```$", "", s)
     m = _JSON_SPAN.search(s)
@@ -607,7 +793,7 @@ def parse_versions(raw: str, keys: list[str]) -> dict[str, str]:
     if not isinstance(obj, dict):
         return {}
     return {
-        k: v.strip()
+        k: strip_json_tail(v.strip())
         for k, v in obj.items()
         if k in keys
         and isinstance(v, str)

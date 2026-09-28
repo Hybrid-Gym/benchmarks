@@ -305,6 +305,53 @@ and every continuation is itself a repeat, keeps the shorter deduplicated text (
 records are kept as `<base>.scaled.x32.predup.jsonl`. The ½×-8× datasets were left alone (≤ 0.2 %
 repeats, and students have been trained on them).
 
+Family C x32 (2026-09-27, `THOUGHT_X32_CLAMP` = 16 000, adaptive limiter 16/4/8): claude45 3 580 of
+3 738 thoughts rewritten in band (464 of them clamped at 16 000 tokens; 158 kept the original: band
+missed or no target), 8 of 8 for r2egym; every non-think message identical to the deduplicated
+`_text32x`; 71.4M / 47.8M LLM tokens in / out, ~14 h.
+
+### Reply artifacts and meta-language (found 2026-09-28, fixed with `rephrase.py --redo`)
+
+A scan of every record file for text that is not the agent's own words found two classes of artifact
+(rates are the share of accepted versions, in excess of the original text; `llm.META_PATTERNS` /
+`llm.RESIDUE_PATTERNS`):
+
+1. **Meta-language about the rewriting task.** The model narrates its instructions instead of thinking
+   as the agent: "the thought doesn't mention testing, so I won't plan that", "as the summary says",
+   "I'm supposed to keep the same conclusions", "the next part of my reasoning", and in prose "the tool
+   call I'm making is a view command". It grows with the number of parts a version is written in.
+   claude45 thoughts: ½× 0 %, 2× 4.6 %, 4× 10.0 %, 8× 19.8 %, 32× 45.4 %; family B prose 32×: 4.9 %
+   (claude45) / 5.7 % (r2egym), 8× 0.4 %, 4× ≤ 0.2 %, 2× ≤ 0.1 %; family A t300 0.2 % / 0.1 %, t100
+   0.1 % / 0.0 %; textcov comments 0 of 15 681. The detector is deliberately narrow: a docstring's
+   "summary line", "the next part of the task", a doctest "prompt", "the original wording" of a removed
+   docstring, "the source text" a parser reads and "I'm rewriting the condition" are the agent's words and
+   pass. Rule echoes in the agent's own voice ("I should not invent details the code doesn't show") are
+   not rejected either, only discouraged by the new prompt rule; they occur in ~15 % of the 32× thoughts
+   against 0.7 % of the originals.
+2. **Reply-format residue.** (a) One-reply versions ending in `"}\n\n{`: the model answered with two
+   JSON objects and `_lenient_extract` stripped only one closing quote and brace. Family B 2× / 4×
+   prose: 3.3 / 3.4 % (claude45), 2.3 / 2.4 % (r2egym); ½× 0.9 / 1.3 %; 8× 0.5 / 0.3 %; family A t50-t300
+   0.3-0.8 %; thoughts 0.4-1.7 %. These are in the pushed `_text2x` / `_text4x` datasets that students
+   were trained on. (b) `</think>{"part": "` inside parts-written versions: the model drafted a part,
+   emitted `</think>` and restarted the object, and `extract_partial` took everything after the FIRST
+   `"part": "`. 32× prose 5.3 % (claude45) / 7.8 % (r2egym), 32× thoughts 8.2 %.
+
+Fixes in the code: `after_think` (a reply is read after its last `</think>`), `extract_partial` takes
+the last occurrence of the key, `_lenient_extract` and `strip_json_tail` cut a trailing `"}` / `"}\n\n{`;
+a rule in `RULES` / `THOUGHT_RULES` ("write as the agent, in the moment ..."); every ladder candidate and
+every part is checked with `meta_hits` / `residue_hits` and rejected with the reason fed back into the
+retry ("it spoke about the rewriting task ("the thought") instead of as the agent ..."); and
+`build_variants.py` refuses to build a variant whose versions carry either artifact
+(`--allow-artifacts` overrides). `rephrase.py --redo <finished jsonl>` rewrites only the versions with
+an artifact (a version that merely ends in `"}` is cut and kept when it stays in band) and writes
+`<base>.<family>.redo.jsonl`, which the build takes after the original file. Scope of the redo
+(versions): claude45 thoughts 2× 173, 4× 369, 8× 719, 32× 1 625 + 295 residue; claude45 prose 32× ~1 000,
+8× 46, 4× 18, 2× 9, ½× 4; r2egym prose 32× ~3 500, 8× 123, 4× 73, 2× 17; family A 63 + 66 turns; 717 /
+~1 700 (claude45 / r2egym) prose versions and ~90 thoughts only lost their JSON tail. Smoke test on 4
+thoughts: every rewritten version clean, 0 fallbacks, 5 meta rejections re-asked successfully; the run
+is `eval_outputs/verbosity_rephrase/redo_meta.sh` (tmux `redo-meta`, logs `logs/redo_meta.log`), which
+re-pushes every rephrased variant of a (base, family) as soon as its redo finishes.
+
 ## Usage
 
 ```bash

@@ -62,6 +62,8 @@ from llm import (  # noqa: E402
     THOUGHT_X32_CLAMP,
     ScaledLengths,
     band,
+    meta_hits,
+    residue_hits,
 )
 from tokens import count_tokens  # noqa: E402
 from trajectory import (  # noqa: E402
@@ -166,6 +168,8 @@ def new_stats() -> dict:
         "skipped": 0,
         "deduped": 0,
         "below_band": 0,
+        "residue": 0,  # versions with reply markup left in them (llm.RESIDUE_PATTERNS)
+        "meta": 0,  # versions that speak about the rewriting task (llm.META_PATTERNS)
         "tokens": [],
         "ratios": [],
     }
@@ -190,6 +194,9 @@ def version(reph: dict, unit: tuple[str, int, str], key: str, stats: dict) -> st
             stats["below_band"] += v["dedup"].get("below_band", False)
         if v["ok"] and r["orig_tokens"]:
             stats["ratios"].append(n / r["orig_tokens"])
+        if v["ok"]:
+            stats["residue"] += bool(residue_hits(text))
+            stats["meta"] += bool(meta_hits(text, r["orig_text"], unit[2]))
     stats["turns"] += 1
     stats["tokens"].append(n)
     return text
@@ -459,6 +466,11 @@ def main() -> None:
         default=0,
         help="only the first N rows (debug; never push with this)",
     )
+    p.add_argument(
+        "--allow-artifacts",
+        action="store_true",
+        help="build even when versions carry reply markup or meta-language (default: refuse)",
+    )
     args = p.parse_args()
     if args.limit and args.push:
         sys.exit("refusing to --push a --limit build")
@@ -520,6 +532,12 @@ def main() -> None:
             )
         if n_problems:
             sys.exit(f"error: {n_problems} rows failed validation for {variant}")
+        artifacts = {k: stats[k] + stats["thought"][k] for k in ("residue", "meta")}
+        if any(artifacts.values()):
+            msg = f"{variant}: {artifacts['residue']} versions with reply markup, {artifacts['meta']} with meta-language (rephrase.py --redo)"
+            if not args.allow_artifacts:
+                sys.exit(f"error: {msg}")
+            print(f"  WARNING {msg}", file=sys.stderr)
         ds = Dataset.from_list(rows)
         local = out_dir / f"{label}_{variant}"
         ds.save_to_disk(str(local))
