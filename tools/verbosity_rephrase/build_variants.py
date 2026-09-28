@@ -278,6 +278,7 @@ def card(
     n_rows: int,
     stats: dict,
     tolerance: float,
+    name_suffix: str = "",
 ) -> str:
     key = FAMILIES[family].variants[variant]
     toks = stats["tokens"]
@@ -417,7 +418,7 @@ def card(
     return f"""---
 license: mit
 ---
-# {base_repo.split("/")[-1]}_{variant}
+# {base_repo.split("/")[-1]}_{variant}{name_suffix}
 
 Verbosity-ablation variant of [`{base_repo}`](https://huggingface.co/datasets/{base_repo}): {what}
 
@@ -465,6 +466,11 @@ def main() -> None:
         type=int,
         default=0,
         help="only the first N rows (debug; never push with this)",
+    )
+    p.add_argument(
+        "--name-suffix",
+        default="",
+        help="appended to every variant's dataset name, e.g. _by_opus45 for a rewriter ablation",
     )
     p.add_argument(
         "--allow-artifacts",
@@ -539,10 +545,17 @@ def main() -> None:
                 sys.exit(f"error: {msg}")
             print(f"  WARNING {msg}", file=sys.stderr)
         ds = Dataset.from_list(rows)
-        local = out_dir / f"{label}_{variant}"
+        local = out_dir / f"{label}_{variant}{args.name_suffix}"
         ds.save_to_disk(str(local))
         readme = card(
-            args.hf, args.family, variant, model, len(rows), stats, args.tolerance
+            args.hf,
+            args.family,
+            variant,
+            model,
+            len(rows),
+            stats,
+            args.tolerance,
+            args.name_suffix,
         )
         (out_dir / f"{label}_{variant}.README.md").write_text(readme)
         toks = stats["tokens"]
