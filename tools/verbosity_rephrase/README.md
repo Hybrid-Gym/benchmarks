@@ -389,10 +389,12 @@ x0.5 / x8 with `--prior think.x2+x4.jsonl` (x8 grows in parts from x4; the prior
 `think.x0.5+x8.jsonl`) and builds `_text0.5x_think0.5x`, `_text8x_think8x`.
 
 The gateway rate-limits per source IP (a probe on an idle model gets instant empty-body 429s while three
-jobs run; two jobs on different models are fine), so the gateway jobs run two at a time. `queue5.sh`
-orders them 4× first: this family's `4x` stage and the rewriter ablation of `text4x_think4x` by Opus 4.5
-(`rewriter_ablation.sh`), then the ablation by Qwen3-Next-80B, then this family's `rest` stage, then the
-gpt5mini `add_think` synthesis. Every stage resumes from its records, so a killed job restarts where it
+jobs run; two jobs on different models are fine), so the gateway jobs run two at a time, 4× first. One
+exception: the think stage of the rewriter ablation by Opus 4.5 (`rewriter_ablation.sh`; few, long requests)
+runs alone. Next to a job with many short requests the per-IP 429s keep its adaptive limiter at 3-5 workers
+(~5 units/min); alone it holds 12 workers at ~23 units/min with no 429. `queue6.sh`: this family's `4x`
+stage and the Opus 4.5 ablation, then (Opus alone) the ablation by Qwen3-Next-80B next to this family's
+`rest` stage, then the gpt5mini `add_think` synthesis. Every stage resumes from its records, so a killed job restarts where it
 stopped.
 
 Stage `4x` pushed 2026-09-29 18:45Z (think x2/x4: 5 150 units, 0 errors). Validated fresh from HF: rows,
