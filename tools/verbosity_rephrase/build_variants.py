@@ -216,7 +216,8 @@ def build_one(
             stats["tokens"].append(count_tokens(t.text) if t.kind == "text" else 0)
         else:
             texts[idx] = version(reph, (row["instance_id"], idx, "text"), key, stats)
-            if t.tool == "think":
+            # A think call without a `thought` argument (qwen3.5-397b: 7, summary only or `Thought`) keeps its call.
+            if t.tool == "think" and thought_of(t.call):
                 thoughts[idx] = version(
                     reph, (row["instance_id"], idx, "thought"), key, stats["thought"]
                 )
@@ -248,7 +249,7 @@ def validate(
                 problems.append(f"verbatim turn {i} changed")
             continue
         text, call, tool, kind = split_content(new["content"])
-        if tool == "think" and key is not None:
+        if tool == "think" and key is not None and thought_of(sk.turns[i].call):
             if (
                 not thought_of(call)
                 or with_thought(sk.turns[i].call, thought_of(call)) != call
@@ -260,11 +261,30 @@ def validate(
             problems.append(f"text0 turn {i} still has prose")
         if FUNCTION_BLOCK.search(text):
             problems.append(f"prose contains a function block at {i}")
-    if any(m["role"] == "assistant" and not m["content"].strip() for m in new_msgs):
+    # The base data's own empty assistant turns (qwen3.5-397b: 63, each answered by "Your last response did
+    # not include a function call...") are kept like any verbatim turn; only a turn emptied here is a problem.
+    if any(
+        new["role"] == "assistant"
+        and not new["content"].strip()
+        and base_msgs[i]["content"].strip()
+        for new, i in zip(new_msgs, sk.keep, strict=True)
+    ):
         problems.append("empty assistant turn")
+
+    def stray(i: int, tool: str) -> bool:
+        """A `tool` block inside a kept turn whose own call is something else (a malformed or two-call
+        turn the base carries verbatim, e.g. `<tool_call><function=file_editor>...</tool_call><function=think>`)."""
+        t = sk.turns.get(i)
+        return (
+            t is not None
+            and t.tool != tool
+            and f"<function={tool}>" in base_msgs[i]["content"]
+        )
+
     for tool, how in (("think", think), ("task_tracker", plan)):
         if how == "drop" and any(
-            f"<function={tool}>" in m["content"] for m in new_msgs
+            f"<function={tool}>" in new["content"] and not stray(i, tool)
+            for new, i in zip(new_msgs, sk.keep, strict=True)
         ):
             problems.append(f"{tool} survived")
     return problems

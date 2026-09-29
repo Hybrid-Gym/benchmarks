@@ -84,8 +84,16 @@ def split_content(content: str) -> tuple[str, str, str | None, str]:
     return content.strip(), "", None, "text"
 
 
+THOUGHT_LOGGED = "Your thought has been logged."
+
+
 def pair_results(messages: list[dict]) -> dict[int, int | None]:
-    """Map each assistant index to its result index: the k-th call of a run gets the k-th result."""
+    """Map each assistant index to its result index: the k-th call of a run gets the k-th result.
+
+    A run with fewer results than calls (qwen3.5-397b: 11 runs, e.g. a call to a tool that does not exist
+    next to a think call, answered only by "Your thought has been logged.") gives each such result to a
+    think call first, so that dropping the think turns never leaves another call answered by a think result.
+    """
     pairs: dict[int, int | None] = {}
     i, n = 0, len(messages)
     while i < n:
@@ -98,8 +106,18 @@ def pair_results(messages: list[dict]) -> dict[int, int | None]:
         k = j
         while k < n and messages[k]["role"] == "user":
             k += 1
-        for pos, a in enumerate(range(i, j)):
-            pairs[a] = j + pos if j + pos < k else None
+        calls, results = list(range(i, j)), list(range(j, k))
+        if len(results) < len(calls):
+            thinks = [
+                a for a in calls if split_content(messages[a]["content"])[2] == "think"
+            ]
+            logged = [r for r in results if THOUGHT_LOGGED in messages[r]["content"]]
+            pairs.update(zip(thinks, logged))
+            taken = set(pairs.values())
+            calls = [a for a in calls if a not in pairs]
+            results = [r for r in results if r not in taken]
+        for pos, a in enumerate(calls):
+            pairs[a] = results[pos] if pos < len(results) else None
         i = k
     return pairs
 

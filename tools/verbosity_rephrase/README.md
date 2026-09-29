@@ -376,13 +376,44 @@ rows, 817 task_tracker calls, 54 % of the non-think turns carry prose) and the r
 so the rewritten text stays in-family. Rungs x0.5 / x2 / x4 / x8 only (no 32×): variants
 `_text{0x,0.5x,2x,4x,8x}_think{same}`. Driver `eval_outputs/verbosity_rephrase/think_family_397b.sh`
 (records in `qwen35_397b/`): the scaled family for the non-think turns' prose, the think family for the think
-turns, one build. Smoke test on 2 rows: prose 2 calls per unit (the model misses the band on the first reply
+turns. Smoke test on 2 rows: prose 2 calls per unit (the model misses the band on the first reply
 more often than deepseek-v4-flash), thoughts 6.3 calls per unit, 0 meta-language or residue, ratios
 0.53 / 1.81 / 3.73 / 8.24 (prose) and 0.61 / 2.03 / 3.93 / 7.85 (thoughts). Qwen3.5-397B also passed a
-2-row smoke as a rewriter of the claude45 data. The gateway rate-limits per source IP (a probe on an idle
-model gets instant empty-body 429s while three jobs run), so this and the other gateway jobs run one at a
-time (`queue2.sh`: this family, then the gpt5mini `add_think` synthesis, then the rewriter ablation of
-`text4x_think4x` by Opus 4.5 and by Qwen3-Next-80B, `rewriter_ablation.sh`).
+2-row smoke as a rewriter of the claude45 data.
+
+The driver runs in two stages so that every 4× dataset comes first (Gaokai, 2026-09-29):
+`think_family_397b.sh 4x` writes the prose at x0.5 / x2 / x4 / x8 (one reply per turn, so all rungs at once)
+and the think turns at x2 / x4 only (x4 thoughts over 600 tokens grow in parts from x2), then builds and pushes
+`_text0x_think0x`, `_text2x_think2x`, `_text4x_think4x`. `think_family_397b.sh rest` writes the think turns at
+x0.5 / x8 with `--prior think.x2+x4.jsonl` (x8 grows in parts from x4; the prior records are merged into
+`think.x0.5+x8.jsonl`) and builds `_text0.5x_think0.5x`, `_text8x_think8x`.
+
+The gateway rate-limits per source IP (a probe on an idle model gets instant empty-body 429s while three
+jobs run; two jobs on different models are fine), so the gateway jobs run two at a time. `queue5.sh`
+orders them 4× first: this family's `4x` stage and the rewriter ablation of `text4x_think4x` by Opus 4.5
+(`rewriter_ablation.sh`), then the ablation by Qwen3-Next-80B, then this family's `rest` stage, then the
+gpt5mini `add_think` synthesis. Every stage resumes from its records, so a killed job restarts where it
+stopped.
+
+Stage `4x` pushed 2026-09-29 18:45Z (think x2/x4: 5 150 units, 0 errors). Validated fresh from HF: rows,
+user turns and every call byte-identical to the base (think calls apart from the thought), 0 meta-language;
+`_text0x_think0x` checked separately as an ordered subsequence of the base that skips exactly the 2 575 think
+turns and their 2 567 results, task_tracker turns kept verbatim.
+
+| dataset | prose ratio | thought ratio | fallback prose / thoughts | residue (from the base) |
+|---|---|---|---|---|
+| `_text0x_think0x` | 0 | — (think dropped) | — | 1 |
+| `_text2x_think2x` | 1.91 | 2.25 | 149 / 4 | 1 |
+| `_text4x_think4x` | 3.88 | 4.15 | 143 / 2 | 2 |
+
+The base data has shapes the claude45 data does not, and the first build refused it; `build_variants` and
+`trajectory` now handle them without touching the claude45 builds: 63 empty assistant turns (each answered by
+"Your last response did not include a function call") are kept like any verbatim turn; 7 think calls without a
+`thought` argument (summary only, or `Thought`) keep their call; 2 turns carry a think block inside another
+call (`<tool_call><function=file_editor>...</tool_call><function=think>`, a malformed `<tool_call><function=think>`)
+and stay verbatim; and 11 runs of parallel calls have fewer results than calls, where the "thought has been
+logged" result now goes to the think call (positional pairing gave it to a call of a non-existent tool in 4 runs,
+which `_text0x_think0x` would have left answered by a think result).
 
 ## Usage
 
