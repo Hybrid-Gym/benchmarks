@@ -417,6 +417,24 @@ and stay verbatim; and 11 runs of parallel calls have fewer results than calls, 
 logged" result now goes to the think call (positional pairing gave it to a call of a non-existent tool in 4 runs,
 which `_text0x_think0x` would have left answered by a think result).
 
+### Rewriter-model ablation of claude45 `_text4x_think4x` (2026-09-29)
+
+The same variant as `func_localize_claude45_1457i_text4x_think4x` (rewriter deepseek-v4-flash), rewritten by
+another model: `eval_outputs/verbosity_rephrase/rewriter_ablation.sh <model> <tag> <extra-body>` writes the prose
+at x4 (scaled family) and the think turns at x2 / x4 into `by_<tag>/`, then builds with `--name-suffix _by_<tag>`
+and pushes `func_localize_claude45_1457i_text4x_think4x_by_<tag>`.
+
+| rewriter | dataset | prose ratio | thought ratio | fallback prose / thoughts | tokens mean prose / thought |
+|---|---|---|---|---|---|
+| deepseek-v4-flash | `_text4x_think4x` | 3.92 | 4.22 | 303 / 40 | 50.4 / 1 362 |
+| Opus 4.5 | `_text4x_think4x_by_opus45` | 4.30 | 3.90 | 1 / 5 | 59.9 / 1 261 |
+| Qwen3-Next-80B | `_text4x_think4x_by_qwen3next80b` | running | | | |
+
+Opus 4.5 pushed 2026-09-29 22:04Z (think x2/x4: 7 000 units, 1 error retried). Validated fresh from HF: 1 457 rows,
+0 structural mismatches with the base, 0 reply markup, 0 meta-language in 11 136 prose texts and 3 738 thoughts.
+Its first push went to `_text4x_think4x` itself, because `build_variants` left the suffix out of the repo name
+(fixed); that repo was restored to its 2026-09-28 revision (byte-identical, 10 minutes after the overwrite).
+
 ## Usage
 
 ```bash

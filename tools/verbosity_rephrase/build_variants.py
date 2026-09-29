@@ -565,7 +565,8 @@ def main() -> None:
                 sys.exit(f"error: {msg}")
             print(f"  WARNING {msg}", file=sys.stderr)
         ds = Dataset.from_list(rows)
-        local = out_dir / f"{label}_{variant}{args.name_suffix}"
+        name = f"{label}_{variant}{args.name_suffix}"
+        local = out_dir / name
         ds.save_to_disk(str(local))
         readme = card(
             args.hf,
@@ -577,7 +578,7 @@ def main() -> None:
             args.tolerance,
             args.name_suffix,
         )
-        (out_dir / f"{label}_{variant}.README.md").write_text(readme)
+        (out_dir / f"{name}.README.md").write_text(readme)
         toks = stats["tokens"]
         ratio = (
             f" ratio mean={statistics.mean(stats['ratios']):.2f}"
@@ -591,13 +592,13 @@ def main() -> None:
                 f"ratio mean={statistics.mean(th['ratios'] or [0]):.2f} skipped={th['skipped']} fallback={th['fallback']}"
             )
         print(
-            f"{label}_{variant}: rows={len(rows)} turns={stats['turns']} dropped={stats['dropped']} "
+            f"{name}: rows={len(rows)} turns={stats['turns']} dropped={stats['dropped']} "
             f"prose tok mean={statistics.mean(toks):.1f} median={statistics.median(toks):.0f}{ratio} "
             f"empty={stats['empty']} skipped={stats['skipped']} fallback={stats['fallback']} -> {local}",
             file=sys.stderr,
         )
         if args.push:
-            repo = f"{args.org}/{label}_{variant}"
+            repo = f"{args.org}/{name}"
             ds.push_to_hub(
                 repo, split=args.hf_split, private=False
             )  # the siblings are public
