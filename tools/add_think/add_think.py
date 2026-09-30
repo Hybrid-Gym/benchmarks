@@ -22,11 +22,13 @@ about the writing task instead of as the agent, or that is far off the usual len
 again once, then dropped.
 
 `--fact-check` then has an LLM check every thought against the run up to its position (the full tool
-outputs, which the writer saw clipped): a thought that states a wrong name, parameter, default, path,
-line number or behaviour (12 % of gpt5mini's, 8 % of claude47's in a sample; 0 of 60 of opus-4.5's own)
-is written again with the checker's finding and longer tool results, at most twice, and dropped if it
-is still wrong. Later
-thoughts are checked with the corrected earlier ones in their run. Records: <dataset>.think.checked.jsonl.
+outputs, which the writer saw clipped) and against the agent's next step: a thought that states a wrong
+name, parameter, default, path or behaviour, or that commits to something the next step does not do
+(revising the docstring right before `finish`, settling a docstring style the edit does not use), is
+written again with the checker's finding and longer tool results, at most twice, and dropped if it is
+still wrong. Later thoughts are checked with the corrected earlier ones in their run. Calibrated on
+think steps an independent Opus 4.5 audit had judged: the checker finds 6 of the 7 it flagged and flags
+3 of 40 of opus-4.5's own thoughts, each a real (small) error. Records: <dataset>.think.checked.jsonl.
 
 Usage:
   python tools/add_think/add_think.py --hf synthetic-code-training/func_localize_gpt5mini_1346i \
