@@ -405,8 +405,16 @@ turns and their 2 567 results, task_tracker turns kept verbatim.
 | dataset | prose ratio | thought ratio | fallback prose / thoughts | residue (from the base) |
 |---|---|---|---|---|
 | `_text0x_think0x` | 0 | — (think dropped) | — | 1 |
+| `_text0.5x_think0.5x` | 0.53 | 0.55 | 95 / 1 | 1 |
 | `_text2x_think2x` | 1.91 | 2.25 | 149 / 4 | 1 |
 | `_text4x_think4x` | 3.88 | 4.15 | 143 / 2 | 2 |
+| `_text8x_think8x` | 8.09 | 7.92 | 191 / 3 | 3 |
+
+Stage `rest` pushed 2026-09-30 10:48Z (think x0.5/x8: 5 150 units, 0 errors; 12 thoughts whose x8 target is over the
+8 000-token cap keep their wording), validated the same way. Every residue hit in the table is a `</think>` that the
+base turn already has, in a text the variant keeps verbatim. A full disk on the shared box (2026-09-30 ~01:05Z) made
+the record write fail in pass 1; `rephrase.py` now cancels the pending units when a write fails, instead of running
+them all against the gateway with nothing kept (pass 2 resumed from the 929 records written before).
 
 The base data has shapes the claude45 data does not, and the first build refused it; `build_variants` and
 `trajectory` now handle them without touching the claude45 builds: 63 empty assistant turns (each answered by
@@ -428,12 +436,14 @@ and pushes `func_localize_claude45_1457i_text4x_think4x_by_<tag>`.
 |---|---|---|---|---|---|
 | deepseek-v4-flash | `_text4x_think4x` | 3.92 | 4.22 | 303 / 40 | 50.4 / 1 362 |
 | Opus 4.5 | `_text4x_think4x_by_opus45` | 4.30 | 3.90 | 1 / 5 | 59.9 / 1 261 |
-| Qwen3-Next-80B | `_text4x_think4x_by_qwen3next80b` | running | | | |
+| Qwen3-Next-80B | `_text4x_think4x_by_qwen3next80b` | 4.13 | 3.98 | 294 / 75 | 50.6 / 1 275 |
 
 Opus 4.5 pushed 2026-09-29 22:04Z (think x2/x4: 7 000 units, 1 error retried). Validated fresh from HF: 1 457 rows,
 0 structural mismatches with the base, 0 reply markup, 0 meta-language in 11 136 prose texts and 3 738 thoughts.
 Its first push went to `_text4x_think4x` itself, because `build_variants` left the suffix out of the repo name
 (fixed); that repo was restored to its 2026-09-28 revision (byte-identical, 10 minutes after the overwrite).
+Qwen3-Next-80B pushed 2026-09-30 09:02Z (think x2/x4: 7 476 units, 0 errors), validated the same way: 1 457 rows, 0 structural
+mismatches, 0 reply markup, 0 meta-language; `_text4x_think4x` untouched since the restore.
 
 ## Usage
 
