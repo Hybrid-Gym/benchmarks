@@ -110,12 +110,38 @@ trajectory), 80 min at ~10 trajectories per minute while sharing the gateway wit
 fresh from HF: same columns and row order as the base, every row equals the base with its recorded think
 pairs inserted, every think call followed by the logged result.
 
+### Fact check (2026-09-30)
+
+A review of the gpt5mini records found wrong facts in the synthesized thoughts (a parameter named `m`, default 0, where
+the code has `wmean=True`; `parse` for `parse_spec`; wrong line numbers). Root cause: the writer sees every tool result
+clipped at 1 500 characters and fills in the code it cannot see. `--fact-check` has deepseek-v4-flash (reasoning on)
+check each thought against the full run up to its position and against the agent's next step; a flagged thought is
+written again with the finding and 8 000-character results, at most twice, then dropped.
+
+The checker was calibrated against an independent Opus 4.5 audit. A first version (facts only) left rewritten review
+thoughts that decide to revise the docstring right before `finish` and compose thoughts settling a style the edit does
+not use (Opus: 7 of 90 still wrong); a strict claim-by-claim version also flagged 12 of 40 of opus-4.5's own thoughts
+(mostly line numbers off by one). The final version catches 6 of those 7, flags 3 of 40 opus-4.5 thoughts (each a real
+small error), and after the fix Opus finds 4 of 100 thoughts wrong: 3 line numbers off by 3-6 lines, 1 arguable.
+
+| dataset | thoughts | flagged | rewritten | dropped | flagged: strategy / verify / compose / review |
+|---|---|---|---|---|---|
+| `func_localize_gpt5mini_add_think_1346i` (pushed 19:30Z) | 4 899 | 1 112 (22.7 %) | 937 | 175 | 2 % / 39 % / 34 % / 19 % |
+| `func_localize_claude47_add_think_1467i` (re-pushed 21:02Z) | 3 217 | 372 (11.6 %) | 334 | 38 | 1 % / 18 % / 19 % / 12 % |
+
+gpt5mini ends with 4 724 think steps in its 1 346 trajectories, claude47 with 3 179 added to its 914 trajectories
+without one. Most drops are thoughts no true wording can save: a compose thought where gpt5mini writes a NumPy-style
+docstring into a file with INPUT/OUTPUT docstrings, or a review of a docstring that is wrong when the agent finishes
+without fixing it. Both validated fresh from HF: same columns and row order as the base, every row equals the base
+with its checked think pairs inserted, every think call followed by the logged result, 0 markup, 0 meta-language in
+the added thoughts (claude47's 6 hits are in its own opus-4.7 thoughts, unchanged).
+
 ## Usage
 
 ```bash
 # write the records (resumable; one line per trajectory in eval_outputs/add_think/<dataset>.think.jsonl)
 python tools/add_think/add_think.py --hf synthetic-code-training/func_localize_gpt5mini_1346i --out-dir eval_outputs/add_think
-# build the dataset and push it as synthetic-code-training/func_localize_gpt5mini_add_think_1346i
-python tools/add_think/add_think.py --hf synthetic-code-training/func_localize_gpt5mini_1346i --out-dir eval_outputs/add_think --build --push
+# fact-check the records, then build the dataset and push it as synthetic-code-training/func_localize_gpt5mini_add_think_1346i
+python tools/add_think/add_think.py --hf synthetic-code-training/func_localize_gpt5mini_1346i --out-dir eval_outputs/add_think --fact-check --build --push
 ```
-`eval_outputs/add_think/run_add_think.sh` runs both datasets (tmux `add-think`).
+`eval_outputs/add_think/run_add_think.sh` writes the records of both datasets (tmux `add-think`), `run_fact_check.sh` checks, builds and pushes them (tmux `fact-check`).
