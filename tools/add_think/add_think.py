@@ -21,10 +21,17 @@ the agent has not yet seen. A thought that names an identifier the run only show
 about the writing task instead of as the agent, or that is far off the usual length is asked for
 again once, then dropped.
 
+`--fact-check` then has an LLM check every thought against the run up to its position (the full tool
+outputs, which the writer saw clipped): a thought that states a wrong name, parameter, default, path,
+line number or behaviour (12 % of gpt5mini's, 8 % of claude47's in a sample; 0 of 60 of opus-4.5's own)
+is written again with the checker's finding and longer tool results, at most twice, and dropped if it
+is still wrong. Later
+thoughts are checked with the corrected earlier ones in their run. Records: <dataset>.think.checked.jsonl.
+
 Usage:
   python tools/add_think/add_think.py --hf synthetic-code-training/func_localize_gpt5mini_1346i \
       --out-dir eval_outputs/add_think [--checkpoints strategy,verify,compose,review] [--limit 3]
-  python tools/add_think/add_think.py --hf ... --out-dir eval_outputs/add_think --build --push
+  python tools/add_think/add_think.py --hf ... --out-dir eval_outputs/add_think --fact-check --build --push
 Records: <out-dir>/<dataset>.think.jsonl, one line per trajectory (resumable); the built dataset is
 pushed as <org>/<dataset with the model tag>_add_think_<rows>i.
 """
@@ -80,6 +87,9 @@ TASK_CHARS = 4000
 RESULT_CHARS = 1500
 CALL_CHARS = 1200
 THINK_RESULT = "EXECUTION RESULT of [function]:\nYour thought has been logged."
+FACT_CHARS = 200_000  # run text shown to the fact checker; a longer run keeps its start and its latest steps
+FACT_ROUNDS = 3  # checks per thought: the original and up to two rewrites
+FACT_RESULT_CHARS = 8000  # a rewrite sees longer tool results: most wrong facts were about code clipped at RESULT_CHARS
 FUNC = re.compile(r"<function=([a-zA-Z_]+)>")
 PARAM = re.compile(r"<parameter=([A-Za-z_]+)>(.*?)</parameter>", re.DOTALL)
 EDIT = re.compile(
@@ -112,6 +122,22 @@ Rules:
 Respond with ONLY a JSON object {{"summary": "<about 10 words naming what this thought does>", "thought": "..."}}."""
 
 
+FACT_PROMPT = """Below is the start of a recorded run of a coding agent (its task, its actions and their tool outputs), the agent's next action, and a THOUGHT inserted just before that next action. Check the THOUGHT against the run so far.
+
+Flag it only if the THOUGHT states a concrete fact that the run so far CONTRADICTS or that is clearly NOT in it: a wrong identifier, parameter name, default value, file path, line number, return value, or code behavior. Do not flag plans or intentions (it may announce what the next action does), hedged guesses ("likely", "probably"), or paraphrases of the task description.
+
+# Run so far
+{prefix}
+
+# Next action (after the THOUGHT)
+{next}
+
+# THOUGHT
+{thought}
+
+Reply with JSON only: {{"wrong_fact": true|false, "detail": "<the wrong statement and what the run shows, or empty>"}}"""
+
+
 def clip(s: str, limit: int, tail: int = 300) -> str:
     if len(s) <= limit:
         return s
@@ -125,7 +151,7 @@ def tool_of(content: str) -> str:
     return m.group(1) if m else "(none)"
 
 
-def render(messages: list[dict], upto: int) -> str:
+def render(messages: list[dict], upto: int, result_chars: int = RESULT_CHARS) -> str:
     """The task, then every step before message `upto` with its result, numbered."""
     out = []
     step = 0
@@ -135,7 +161,7 @@ def render(messages: list[dict], upto: int) -> str:
         if m["role"] == "user":
             out.append(
                 ("TASK:\n" if step == 0 else f"RESULT {step}:\n")
-                + clip(m["content"], TASK_CHARS if step == 0 else RESULT_CHARS)
+                + clip(m["content"], TASK_CHARS if step == 0 else result_chars)
             )
         else:
             step += 1
@@ -193,7 +219,11 @@ def think_message(summary: str, thought: str) -> dict:
 
 
 def ask_prompt(
-    messages: list[dict], idx: int, names: list[str], exemplars: dict[str, Any]
+    messages: list[dict],
+    idx: int,
+    names: list[str],
+    exemplars: dict[str, Any],
+    result_chars: int = RESULT_CHARS,
 ) -> tuple[str, str]:
     """(system prompt, user prompt) asking for the thought of checkpoint(s) `names` before messages[idx]."""
     lo = min(WORDS[n][0] for n in names)
@@ -212,7 +242,7 @@ def ask_prompt(
         for ex in rng.sample(exemplars.get(n, []), min(2, len(exemplars.get(n, []))))
     )
     user = (
-        f"{render(messages, idx)}\n\nNEXT STEP (the agent's next call, after the thought):\n"
+        f"{render(messages, idx, result_chars)}\n\nNEXT STEP (the agent's next call, after the thought):\n"
         f"{clip(messages[idx]['content'], CALL_CHARS)}\n\n"
         f"At this point the agent pauses to {purpose}. Write that thought now"
         + (
@@ -254,11 +284,13 @@ def write_thought(
     names: list[str],
     exemplars: dict,
     usage: dict,
+    note: str = "",
+    result_chars: int = RESULT_CHARS,
 ) -> tuple[dict | None, list[dict]]:
-    """(the thought record, the attempt log) for the checkpoint(s) `names` before messages[idx]."""
-    system, user = ask_prompt(messages, idx, names, exemplars)
+    """(the thought record, the attempt log) for the checkpoint(s) `names` before messages[idx];
+    `note` says what was wrong with an earlier thought for this position."""
+    system, user = ask_prompt(messages, idx, names, exemplars, result_chars)
     log: list[dict] = []
-    note = ""
     for rnd in range(3):
         ask: Messages = [
             {"role": "system", "content": system},
@@ -344,6 +376,124 @@ def process_row(
     return out
 
 
+def wrong_fact(
+    judge: Rephraser, messages: list[dict], idx: int, thought: str, usage: dict
+) -> str:
+    """What `thought`, inserted before messages[idx], gets wrong about the run so far, or ""."""
+    prefix = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages[1:idx])
+    if len(prefix) > FACT_CHARS:
+        prefix = (
+            prefix[:8000]
+            + "\n[... middle of the run omitted ...]\n"
+            + prefix[-(FACT_CHARS - 8000) :]
+        )
+    ask: Messages = [
+        {
+            "role": "user",
+            "content": FACT_PROMPT.format(
+                prefix=prefix,
+                next=clip(messages[idx]["content"], CALL_CHARS),
+                thought=thought,
+            ),
+        }
+    ]
+    for _ in range(3):
+        raw, u = judge.complete(ask)
+        usage["calls"] += 1
+        for k in ("prompt_tokens", "completion_tokens"):
+            usage[k] += u.get(k) or 0
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        try:
+            verdict = json.loads(m.group(0)) if m else None
+        except ValueError:
+            verdict = None
+        if isinstance(verdict, dict) and "wrong_fact" in verdict:
+            if not verdict["wrong_fact"]:
+                return ""
+            return str(verdict.get("detail") or "unspecified").strip()[:600]
+    raise RuntimeError("the fact checker gave no verdict")
+
+
+def fact_check_row(
+    rp: Rephraser, judge: Rephraser, row: dict, rec: dict, exemplars: dict
+) -> dict:
+    """`rec` with every thought checked against the run up to its position and rewritten (or dropped) if wrong."""
+    t0 = time.time()
+    messages = list(row["messages"])
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+    judge_usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+    kept: list[dict] = []
+    dropped = list(rec["dropped"])
+    checks: list[dict] = []
+    shift = 0
+    try:
+        for t in sorted(rec["thoughts"], key=lambda r: r["insert_before"]):
+            idx = t["insert_before"] + shift
+            cur: dict | None = t
+            flags: list[str] = []
+            for rnd in range(FACT_ROUNDS):
+                assert cur is not None
+                why = wrong_fact(judge, messages, idx, cur["thought"], judge_usage)
+                if not why:
+                    break
+                flags.append(why)
+                if rnd == FACT_ROUNDS - 1:
+                    cur = None
+                    break
+                cur, _ = write_thought(
+                    rp,
+                    messages,
+                    idx,
+                    t["checkpoints"],
+                    exemplars,
+                    usage,
+                    note=f"it stated something the run contradicts ({why}); state only facts the run shows",
+                    result_chars=FACT_RESULT_CHARS,
+                )
+                if cur is None:
+                    break
+            checks.append(
+                {
+                    "checkpoints": t["checkpoints"],
+                    "insert_before": t["insert_before"],
+                    "flags": flags,
+                    "outcome": "ok"
+                    if not flags
+                    else ("rewritten" if cur is not None else "dropped"),
+                }
+            )
+            if cur is None:
+                dropped.append(
+                    {
+                        "checkpoints": t["checkpoints"],
+                        "insert_before": t["insert_before"],
+                        "why": "fact check",
+                    }
+                )
+                continue
+            cur["insert_before"] = t["insert_before"]
+            kept.append(cur)
+            messages[idx:idx] = [
+                think_message(cur["summary"], cur["thought"]),
+                {"role": "user", "content": THINK_RESULT},
+            ]
+            shift += 2
+    except Exception as e:  # noqa: BLE001
+        return {
+            "instance_id": rec["instance_id"],
+            "error": f"{type(e).__name__}: {str(e)[:200]}",
+        }
+    return {
+        **rec,
+        "thoughts": kept,
+        "dropped": dropped,
+        "fact_check": checks,
+        "fact_usage": {"writer": usage, "checker": judge_usage},
+        "fact_model": judge.model,
+        "fact_elapsed": round(time.time() - t0, 2),
+    }
+
+
 def load_records(path: Path) -> dict[str, dict]:
     out: dict[str, dict] = {}
     if path.exists():
@@ -406,7 +556,94 @@ the writing task, were re-asked once and otherwise dropped.
 | checkpoints dropped after re-asks | {stats["dropped"]} |
 | thought words: mean / median | {statistics.mean(w) if w else 0:.0f} / {statistics.median(w) if w else 0:.0f} |
 | thought tokens (Qwen3 tokenizer): mean | {statistics.mean(stats["tokens"]) if stats["tokens"] else 0:.0f} |
+""" + (
+        f"""
+Every thought was then checked by an LLM against the run up to its position (full tool outputs): one that stated a wrong
+name, parameter, default, path, line number or behaviour was written again with the checker's finding (at most twice) and
+dropped if still wrong. Checked {stats["checked"]}, flagged {stats["flagged"]}, rewritten {stats["rewritten"]}, dropped {stats["fact_dropped"]}.
 """
+        if stats["checked"]
+        else ""
+    )
+
+
+def fact_check(
+    args: argparse.Namespace,
+    rows: list[dict],
+    done: dict[str, dict],
+    path: Path,
+    exemplars: dict,
+) -> dict[str, dict]:
+    """Fact-check the records in `done` not yet in `path` (resumable); return the checked records."""
+    checked = load_records(path)
+    by_id = {r["instance_id"]: r for r in rows}
+    todo = [rec for iid, rec in done.items() if iid not in checked and iid in by_id]
+    n_thoughts = sum(len(r["thoughts"]) for r in todo)
+    print(
+        f"fact check: {len(done)} records, {len(checked)} checked, {len(todo)} to check ({n_thoughts} thoughts, "
+        f"checker {args.judge_model})",
+        file=sys.stderr,
+    )
+    if not todo:
+        return checked
+    key = load_api_key(args.api_key)
+    if not key:
+        sys.exit("error: no API key")
+    limiter = AdaptiveLimiter(
+        start=max(args.workers_min, args.workers // 2),
+        lo=args.workers_min,
+        hi=args.workers,
+    )
+    rp = Rephraser(
+        key,
+        args.base_url,
+        args.model,
+        temperature=args.temperature,
+        max_tokens=1200,
+        extra_body=json.loads(args.extra_body),
+        limiter=limiter,
+    )
+    judge = Rephraser(
+        key,
+        args.base_url,
+        args.judge_model,
+        temperature=0.0,
+        max_tokens=8000,
+        extra_body=json.loads(args.judge_extra_body),
+        limiter=limiter,
+    )
+    t0 = time.time()
+    n_err = n_flag = n_all = 0
+    with (
+        path.open("a") as fh,
+        concurrent.futures.ThreadPoolExecutor(args.workers) as ex,
+    ):
+        futs = [
+            ex.submit(
+                fact_check_row, rp, judge, by_id[rec["instance_id"]], rec, exemplars
+            )
+            for rec in todo
+        ]
+        try:
+            for i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
+                res = fut.result()
+                n_err += bool(res.get("error"))
+                for c in res.get("fact_check", []):
+                    n_all += 1
+                    n_flag += bool(c["flags"])
+                fh.write(json.dumps(res, ensure_ascii=False) + "\n")
+                fh.flush()
+                if i % 25 == 0 or i == len(todo):
+                    rate = i / max(time.time() - t0, 1e-6) * 60
+                    print(
+                        f"  {i}/{len(todo)} err={n_err} flagged={n_flag}/{n_all} {rate:.1f} rows/min "
+                        f"eta={(len(todo) - i) / max(rate, 1e-6):.0f} min",
+                        file=sys.stderr,
+                    )
+        except BaseException:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+    return load_records(path)
 
 
 def main() -> None:
@@ -445,6 +682,18 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--workers-min", type=int, default=3)
     p.add_argument("--limit", type=int, default=0, help="first N rows (debug)")
+    p.add_argument(
+        "--fact-check",
+        action="store_true",
+        help="check every thought against the run so far and rewrite / drop wrong ones (<dataset>.think.checked.jsonl); "
+        "--build then uses the checked records",
+    )
+    p.add_argument(
+        "--judge-model",
+        default="nvidia/deepseek-ai/deepseek-v4-flash",
+        help="fact checker (reasoning on)",
+    )
+    p.add_argument("--judge-extra-body", default="{}")
     p.add_argument(
         "--build", action="store_true", help="build the dataset from the records"
     )
@@ -511,6 +760,10 @@ def main() -> None:
                         file=sys.stderr,
                     )
         done = load_records(rec_path)
+    if args.fact_check:
+        done = fact_check(
+            args, rows, done, out_dir / f"{label}.think.checked.jsonl", exemplars
+        )
     if not (args.build or args.push):
         return
     missing = [
@@ -531,6 +784,10 @@ def main() -> None:
         "dropped": 0,
         "words": [],
         "tokens": [],
+        "checked": 0,
+        "flagged": 0,
+        "rewritten": 0,
+        "fact_dropped": 0,
     }
     built = []
     for r in rows:
@@ -545,6 +802,11 @@ def main() -> None:
                 stats["rows_none"] += 1
             stats["added"] += len(rec["thoughts"])
             stats["dropped"] += len(rec["dropped"])
+            for c in rec.get("fact_check", []):
+                stats["checked"] += 1
+                stats["flagged"] += bool(c["flags"])
+                stats["rewritten"] += c["outcome"] == "rewritten"
+                stats["fact_dropped"] += c["outcome"] == "dropped"
             for t in rec["thoughts"]:
                 stats["words"].append(t["words"])
                 stats["tokens"].append(count_tokens(t["thought"]))
@@ -559,7 +821,13 @@ def main() -> None:
     print(
         f"{repo}: rows={stats['rows']} added={stats['added']} to {stats['rows_added']} trajectories "
         f"(had think: {stats['rows_had']}, no target: {stats['rows_none']}, dropped checkpoints: {stats['dropped']}) "
-        f"words mean={statistics.mean(stats['words']) if stats['words'] else 0:.0f}",
+        f"words mean={statistics.mean(stats['words']) if stats['words'] else 0:.0f}"
+        + (
+            f" | fact check: {stats['flagged']}/{stats['checked']} flagged, {stats['rewritten']} rewritten, "
+            f"{stats['fact_dropped']} dropped"
+            if stats["checked"]
+            else ""
+        ),
         file=sys.stderr,
     )
     if args.push:
