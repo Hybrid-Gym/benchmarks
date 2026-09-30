@@ -870,24 +870,30 @@ def main() -> None:
                 )
                 for u in pending
             ]
-            for i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
-                res = fut.result()
-                n_err += bool(res.get("error"))
-                n_ok += not res.get("error")
-                run_keys = res.get("redo_keys") or keys
-                n_fb += not res.get("error") and any(
-                    run_keys is None or k in run_keys for k in res["fallback"]
-                )  # this run's keys only; a merged prior record carries its own
-                n_skip += not res["targets"]
-                fh.write(json.dumps(res, ensure_ascii=False) + "\n")
-                fh.flush()
-                if i % 50 == 0 or i == len(pending):
-                    rate = i / max(time.time() - t0, 1e-6) * 60
-                    print(
-                        f"  {label} {i}/{len(pending)} ok={n_ok} err={n_err} with_fallback={n_fb} "
-                        f"all_skipped={n_skip} {rate:.0f} turns/min eta={(len(pending) - i) / rate:.0f} min",
-                        file=sys.stderr,
-                    )
+            try:
+                for i, fut in enumerate(concurrent.futures.as_completed(futs), 1):
+                    res = fut.result()
+                    n_err += bool(res.get("error"))
+                    n_ok += not res.get("error")
+                    run_keys = res.get("redo_keys") or keys
+                    n_fb += not res.get("error") and any(
+                        run_keys is None or k in run_keys for k in res["fallback"]
+                    )  # this run's keys only; a merged prior record carries its own
+                    n_skip += not res["targets"]
+                    fh.write(json.dumps(res, ensure_ascii=False) + "\n")
+                    fh.flush()
+                    if i % 50 == 0 or i == len(pending):
+                        rate = i / max(time.time() - t0, 1e-6) * 60
+                        print(
+                            f"  {label} {i}/{len(pending)} ok={n_ok} err={n_err} with_fallback={n_fb} "
+                            f"all_skipped={n_skip} {rate:.0f} turns/min eta={(len(pending) - i) / rate:.0f} min",
+                            file=sys.stderr,
+                        )
+            except BaseException:
+                # A failed write (a full disk, 2026-09-30) would otherwise leave the pool running every
+                # pending unit against the gateway for hours with nothing recorded.
+                ex.shutdown(wait=False, cancel_futures=True)
+                raise
         print(
             f"Done {label}: ok={n_ok} err={n_err} with_fallback={n_fb} all_skipped={n_skip} -> {out_path}",
             file=sys.stderr,
