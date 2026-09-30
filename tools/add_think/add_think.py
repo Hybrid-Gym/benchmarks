@@ -90,6 +90,9 @@ THINK_RESULT = "EXECUTION RESULT of [function]:\nYour thought has been logged."
 FACT_CHARS = 200_000  # run text shown to the fact checker; a longer run keeps its start and its latest steps
 FACT_ROUNDS = 3  # checks per thought: the original and up to two rewrites
 FACT_RESULT_CHARS = 8000  # a rewrite sees longer tool results: most wrong facts were about code clipped at RESULT_CHARS
+FACT_NEXT_CHARS = (
+    4000  # the next action as the checker sees it (an edit carries the whole docstring)
+)
 FUNC = re.compile(r"<function=([a-zA-Z_]+)>")
 PARAM = re.compile(r"<parameter=([A-Za-z_]+)>(.*?)</parameter>", re.DOTALL)
 EDIT = re.compile(
@@ -122,20 +125,24 @@ Rules:
 Respond with ONLY a JSON object {{"summary": "<about 10 words naming what this thought does>", "thought": "..."}}."""
 
 
-FACT_PROMPT = """Below is the start of a recorded run of a coding agent (its task, its actions and their tool outputs), the agent's next action, and a THOUGHT inserted just before that next action. Check the THOUGHT against the run so far.
+FACT_PROMPT = """Below is the start of a recorded run of a coding agent (its task, its actions and their tool outputs), a think step inserted at this point (its summary and thought), and the agent's next action. Check the think step.
 
-Flag it only if the THOUGHT states a concrete fact that the run so far CONTRADICTS or that is clearly NOT in it: a wrong identifier, parameter name, default value, file path, line number, return value, or code behavior. Do not flag plans or intentions (it may announce what the next action does), hedged guesses ("likely", "probably"), or paraphrases of the task description.
+Flag wrong_fact only for an error that would mislead a reader: a wrong identifier, parameter name, default value, file path, return value or code behaviour, or a claim about what a search or view showed that the run contradicts or clearly does not contain. Ignore line numbers off by one or two, loose wording, hedged guesses ("likely", "probably"), plans, and paraphrases of the task description.
+
+Flag next_mismatch only when the thought commits to something the next action clearly does not do and is not a first step toward: it decides to revise or add something before finishing but the next action is `finish`; it settles a docstring format or content that the edit does not use; it picks one file, function or search and the next action goes to a different one. A next action that is a reasonable first step of the plan is fine.
 
 # Run so far
 {prefix}
 
-# Next action (after the THOUGHT)
-{next}
-
-# THOUGHT
+# THINK STEP
+summary: {summary}
+thought:
 {thought}
 
-Reply with JSON only: {{"wrong_fact": true|false, "detail": "<the wrong statement and what the run shows, or empty>"}}"""
+# Next action (after the think step)
+{next}
+
+Reply with JSON only: {{"wrong_fact": true|false, "next_mismatch": true|false, "detail": "<each problem: what the step says and what the run or the next action shows; empty if none>"}}"""
 
 
 def clip(s: str, limit: int, tail: int = 300) -> str:
@@ -377,9 +384,15 @@ def process_row(
 
 
 def wrong_fact(
-    judge: Rephraser, messages: list[dict], idx: int, thought: str, usage: dict
+    judge: Rephraser,
+    messages: list[dict],
+    idx: int,
+    summary: str,
+    thought: str,
+    usage: dict,
 ) -> str:
-    """What `thought`, inserted before messages[idx], gets wrong about the run so far, or ""."""
+    """What the think step (`summary`, `thought`) inserted before messages[idx] gets wrong about the run so far
+    or about the next action, or ""."""
     prefix = "\n\n".join(f"[{m['role']}]\n{m['content']}" for m in messages[1:idx])
     if len(prefix) > FACT_CHARS:
         prefix = (
@@ -392,7 +405,8 @@ def wrong_fact(
             "role": "user",
             "content": FACT_PROMPT.format(
                 prefix=prefix,
-                next=clip(messages[idx]["content"], CALL_CHARS),
+                next=clip(messages[idx]["content"], FACT_NEXT_CHARS),
+                summary=summary,
                 thought=thought,
             ),
         }
@@ -408,7 +422,7 @@ def wrong_fact(
         except ValueError:
             verdict = None
         if isinstance(verdict, dict) and "wrong_fact" in verdict:
-            if not verdict["wrong_fact"]:
+            if not (verdict["wrong_fact"] or verdict.get("next_mismatch")):
                 return ""
             return str(verdict.get("detail") or "unspecified").strip()[:600]
     raise RuntimeError("the fact checker gave no verdict")
@@ -433,7 +447,9 @@ def fact_check_row(
             flags: list[str] = []
             for rnd in range(FACT_ROUNDS):
                 assert cur is not None
-                why = wrong_fact(judge, messages, idx, cur["thought"], judge_usage)
+                why = wrong_fact(
+                    judge, messages, idx, cur["summary"], cur["thought"], judge_usage
+                )
                 if not why:
                     break
                 flags.append(why)
@@ -447,7 +463,8 @@ def fact_check_row(
                     t["checkpoints"],
                     exemplars,
                     usage,
-                    note=f"it stated something the run contradicts ({why}); state only facts the run shows",
+                    note=f"it disagreed with the run or with the next step ({why}); state only facts the run shows "
+                    "and end with the decision the next step carries out",
                     result_chars=FACT_RESULT_CHARS,
                 )
                 if cur is None:
