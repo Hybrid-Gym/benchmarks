@@ -1,0 +1,26 @@
+I have access to a python code repository in the directory {{ instance.repo_path }} . You can explore and modify files using the available tools. Consider the following issue description:
+
+<issue_description>
+{{ instance.problem_statement }}
+</issue_description>
+
+A previous attempt to resolve this issue left uncommitted changes in the repository (run `git diff` in {{ instance.repo_path }} to see them). The attempt may be correct, incomplete, or wrong.
+Your task is to make sure the non-test files in {{ instance.repo_path }} satisfy the <issue_description>: keep the parts of the attempt that are right, and fix, complete, or revert the parts that are not.
+I've already taken care of all changes to any of the test files described in the <issue_description>. This means you DON'T have to modify the testing logic or any of the tests in any way!
+The development Python environment is already set up for you (the `python` on your PATH has all dependencies installed), so do not install or reinstall packages.
+
+Follow these phases:
+
+Phase 1. READING: restate the issue in clear terms, then read the current changes with `git diff` and explain what the attempt does.
+
+Phase 2. REPRODUCTION: write a small script `reproduce_issue.py` that exercises the behavior described in the issue and checks the expected result with assertions. Run it against the current code.
+   2.1 The script must import the repository's own code (not a copy of it) and must actually run. A script that crashes for an unrelated reason (import error, typo, wrong setup) tells you nothing: fix the script first.
+   2.2 A syntax check or an import check is not a reproduction.
+
+Phase 3. DIAGNOSIS: if the script fails, find out why the current changes do not resolve the issue. If it passes, look for cases the attempt misses (examples and edge cases from the issue, other code paths that need the same change) and add them to the script.
+
+Phase 4. FIX: edit the source code so that the issue is resolved. Make minimal, focused changes, and revert parts of the attempt that are wrong or unnecessary.
+
+Phase 5. VERIFICATION: re-run the same script until it passes, then run the existing tests for the code you changed and make sure you did not break them.
+
+Phase 6. FINAL REVIEW: re-read the issue and the final `git diff`, and delete `reproduce_issue.py` and any other temporary files you created.
