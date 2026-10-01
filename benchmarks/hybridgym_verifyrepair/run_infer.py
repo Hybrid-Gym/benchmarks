@@ -47,7 +47,7 @@ from benchmarks.utils.evaluation_utils import (
 from benchmarks.utils.llm_config import load_llm_config
 from benchmarks.utils.models import EvalInstance, EvalMetadata
 from openhands.sdk import get_logger
-from openhands.sdk.conversation import RemoteConversation
+from openhands.sdk.conversation import BaseConversation, RemoteConversation
 from openhands.sdk.workspace import RemoteWorkspace
 
 
@@ -114,6 +114,12 @@ def apply_candidate(workspace: _Workspace, repo_path: str, patch: str) -> None:
         raise RuntimeError(f"Candidate patch did not apply: {res.stderr[:500]}")
 
 
+def has_verdict(conversation: BaseConversation) -> bool:
+    """Whether the agent's latest answer (finish or plain message) has a verdict."""
+    history = [e.model_dump(mode="json") for e in conversation.state.events]
+    return parse_verdict(final_answer(history)) is not None
+
+
 def request_verdict(conversation: RemoteConversation) -> None:
     """Judge task: remind the agent (at most twice) if it stopped without a verdict.
 
@@ -121,8 +127,7 @@ def request_verdict(conversation: RemoteConversation) -> None:
     instead of calling ``finish`` is not pushed on by fake user responses.
     """
     for _ in range(MAX_VERDICT_REMINDERS):
-        history = [e.model_dump(mode="json") for e in conversation.state.events]
-        if parse_verdict(final_answer(history)) is not None:
+        if has_verdict(conversation):
             return
         logger.info("No verdict line; sending a reminder")
         conversation.send_message(VERDICT_REMINDER)
@@ -152,6 +157,12 @@ class SWEBenchVerifyRepair(SWEBenchEvaluation):
     ) -> None:
         apply_candidate(workspace, repo_path, self.candidates[instance.id])
 
+    def fake_user_response(self, conversation: BaseConversation) -> str:
+        # A plain-message answer with a verdict ends the judge task.
+        if self.task == "judge" and has_verdict(conversation):
+            return "/exit"
+        return super().fake_user_response(conversation)
+
     def after_conversation(self, conversation: RemoteConversation) -> None:
         if self.task == "judge":
             request_verdict(conversation)
@@ -170,6 +181,12 @@ class R2EGymVerifyRepair(R2EGymEvaluation):
         self, workspace: RemoteWorkspace, instance: EvalInstance, repo_path: str
     ) -> None:
         apply_candidate(workspace, repo_path, self.candidates[instance.id])
+
+    def fake_user_response(self, conversation: BaseConversation) -> str:
+        # A plain-message answer with a verdict ends the judge task.
+        if self.task == "judge" and has_verdict(conversation):
+            return "/exit"
+        return super().fake_user_response(conversation)
 
     def after_conversation(self, conversation: RemoteConversation) -> None:
         if self.task == "judge":

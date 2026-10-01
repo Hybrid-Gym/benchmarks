@@ -31,7 +31,10 @@ from benchmarks.utils.evaluation_utils import (
     construct_eval_output_dir,
     get_default_on_result_writer,
 )
-from benchmarks.utils.fake_user_response import run_conversation_with_fake_user_response
+from benchmarks.utils.fake_user_response import (
+    fake_user_response,
+    run_conversation_with_fake_user_response,
+)
 from benchmarks.utils.image_utils import remote_image_exists
 from benchmarks.utils.litellm_proxy import build_eval_llm
 from benchmarks.utils.llm_config import load_llm_config
@@ -45,7 +48,7 @@ from benchmarks.utils.version import get_phased_image_tag_prefix
 from openhands.sdk import Agent, Conversation, Tool, get_logger
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.context.condenser import LLMSummarizingCondenser
-from openhands.sdk.conversation import RemoteConversation
+from openhands.sdk.conversation import BaseConversation, RemoteConversation
 from openhands.sdk.workspace import RemoteWorkspace
 from openhands.tools.delegate import DelegateTool
 from openhands.workspace import APIRemoteWorkspace, ApptainerWorkspace, DockerWorkspace
@@ -215,6 +218,13 @@ class R2EGymEvaluation(Evaluation):
 
         No-op for the full task; subtasks (e.g. verify-and-repair) override it.
         """
+
+    def fake_user_response(self, conversation: BaseConversation) -> str:
+        """Hook: reply when the agent sends a message instead of calling a tool.
+
+        Returning '/exit' ends the conversation. Subtasks may override it.
+        """
+        return fake_user_response(conversation)
 
     def after_conversation(self, conversation: RemoteConversation) -> None:
         """Hook: continue the conversation after the agent finished, before the
@@ -531,7 +541,9 @@ class R2EGymEvaluation(Evaluation):
         with workspace_keepalive(self.metadata.agent_type, workspace):
             conversation.send_message(instruction)
             # Run conversation with fake user responses to handle agent messages
-            run_conversation_with_fake_user_response(conversation)
+            run_conversation_with_fake_user_response(
+                conversation, self.fake_user_response
+            )
             self.after_conversation(conversation)
 
         # Drop test-run byproducts the agent created (pyc / caches) so they don't
