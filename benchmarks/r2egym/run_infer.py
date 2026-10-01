@@ -83,6 +83,59 @@ def _fix_r2egym_permissions(container_id: str) -> None:
         )
 
 
+R2E_TEST_PATHS = ("/r2e_tests", "/testbed/r2e_tests", "/testbed/run_tests.sh")
+
+
+def hide_eval_artifacts_script(
+    repo: str = "/testbed", test_paths: tuple[str, ...] = R2E_TEST_PATHS
+) -> str:
+    """Shell script that deletes the hidden tests and all git history past HEAD."""
+    return (
+        "set -e; "
+        + "".join(f"rm -rf {p}; " for p in test_paths)
+        + f"cd {repo}; git config --global --add safe.directory {repo}; "
+        "head=$(git symbolic-ref -q HEAD || true); "
+        "git for-each-ref --format='%(refname)' | { grep -vxF \"$head\" || true; } "
+        "| xargs -r -n1 git update-ref -d; "
+        "rm -f .git/ORIG_HEAD .git/FETCH_HEAD .git/MERGE_HEAD .git/CHERRY_PICK_HEAD; "
+        "git reflog expire --expire=now --all; "
+        "git gc --prune=now --quiet"
+    )
+
+
+def _hide_r2egym_eval_artifacts(container_id: str) -> None:
+    """Hide R2E-Gym's grading tests and the repo's future git history from the agent.
+
+    ``/r2e_tests`` and ``/testbed/run_tests.sh`` hold the hidden fail-to-pass tests,
+    and the image's git history reaches commits after the base (including the fix).
+    Neither is available in real issue solving. The tests are deleted rather than
+    moved (the agent has passwordless sudo) and unreachable objects are pruned.
+    Grading runs in a fresh container, so this does not affect the reward, and it
+    happens before the base snapshot, so it never appears in the agent's patch.
+    """
+    if not container_id:
+        raise RuntimeError("[r2egym] no container id; cannot hide eval artifacts")
+    res = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "--user",
+            "root",
+            container_id,
+            "sh",
+            "-c",
+            hide_eval_artifacts_script(),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError(
+            f"[r2egym] hiding eval artifacts failed ({res.returncode}): "
+            f"{(res.stderr or '').strip()[:300]}"
+        )
+
+
 def get_tools_for_preset(
     preset: ToolPresetType, enable_browser: bool = False
 ) -> list[Tool]:
@@ -142,6 +195,9 @@ class R2EGymEvaluation(Evaluation):
       - evaluate_instance(instance, workspace)
     """
 
+    # Hide the hidden tests and future git history from the agent (docker only).
+    hide_eval_artifacts: bool = False
+
     def get_official_docker_image(self, instance: EvalInstance) -> str:
         return get_official_docker_image(instance.data)
 
@@ -150,6 +206,14 @@ class R2EGymEvaluation(Evaluation):
 
     def get_source_repo_path(self, instance: EvalInstance) -> str:
         return constants.REPO_PATH_IN_IMAGE
+
+    def prepare_repo(
+        self, workspace: RemoteWorkspace, instance: EvalInstance, repo_path: str
+    ) -> None:
+        """Hook: modify the repository after it is reset, before the agent starts.
+
+        No-op for the full task; subtasks (e.g. verify-and-repair) override it.
+        """
 
     def prepare_instances(self) -> List[EvalInstance]:
         logger.info("Setting up R2E-Gym evaluation data")
@@ -177,6 +241,8 @@ class R2EGymEvaluation(Evaluation):
         forward_env: list[str] | None = None,
     ) -> RemoteWorkspace:
         """Use DockerWorkspace by default; also supports apptainer / remote."""
+        if self.hide_eval_artifacts and self.metadata.workspace_type != "docker":
+            raise ValueError("hide_eval_artifacts is only supported with docker")
         forward_env = get_acp_forward_env(self.metadata.agent_type, forward_env)
 
         official_docker_image = self.get_official_docker_image(instance)
@@ -210,7 +276,12 @@ class R2EGymEvaluation(Evaluation):
             )
             # R2E-Gym images assume a root runtime; repair permissions so the
             # openhands user can use the prepared venv and edit /testbed in place.
-            _fix_r2egym_permissions(getattr(workspace, "_container_id", ""))
+            container_id = getattr(workspace, "_container_id", "")
+            # Hide first: it rewrites .git as root, and the permission fix then
+            # hands all of /testbed (including .git) back to the openhands user.
+            if self.hide_eval_artifacts:
+                _hide_r2egym_eval_artifacts(container_id)
+            _fix_r2egym_permissions(container_id)
         elif self.metadata.workspace_type == "apptainer":
             if not remote_image_exists(agent_server_image):
                 raise RuntimeError(
@@ -442,6 +513,7 @@ class R2EGymEvaluation(Evaluation):
         assert rev_parse.exit_code == 0, f"git rev-parse failed: {rev_parse.stderr}"
         base_commit = rev_parse.stdout.strip()
         instance.data["base_commit"] = base_commit
+        self.prepare_repo(workspace, instance, repo_path)
 
         instruction = get_instruction(
             instance=instance.data,
