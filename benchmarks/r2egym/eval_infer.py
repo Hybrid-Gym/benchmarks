@@ -109,6 +109,23 @@ def compute_reward(test_output: str, expected_output_json: str) -> float:
     return 1.0
 
 
+def mismatched_tests(test_output: str, expected_output_json: str) -> dict[str, str]:
+    """Tests whose status differs from the expected one: ``{test: "got/expected"}``.
+
+    Diagnostic only (the reward is ``compute_reward``); a test missing on either
+    side shows as ``MISSING``.
+    """
+    parse = decolor_dict_keys(parse_log_pytest(test_output))
+    expected = decolor_dict_keys(json.loads(expected_output_json))
+    parse = {k.split(" - ")[0]: v for k, v in parse.items()}
+    expected = {k.split(" - ")[0]: v for k, v in expected.items()}
+    return {
+        k: f"{parse.get(k, 'MISSING')}/{expected.get(k, 'MISSING')}"
+        for k in sorted(set(parse) | set(expected))
+        if k and parse.get(k) != expected.get(k)
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Raw-docker execution helpers (mirrors r2egym DockerRuntime.run / setup_env)
 # --------------------------------------------------------------------------- #
@@ -261,6 +278,10 @@ def evaluate_one(
         reward = compute_reward(test_out, expected_output_json)
         result["reward"] = reward
         result["resolved"] = reward == 1.0
+        if reward != 1.0:
+            result["mismatched_tests"] = mismatched_tests(
+                test_out, expected_output_json
+            )
         return result
     except Exception as e:  # noqa: BLE001 - never let one instance kill the run
         result["error"] = f"{type(e).__name__}: {e}"
