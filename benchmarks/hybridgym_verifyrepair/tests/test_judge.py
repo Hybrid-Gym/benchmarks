@@ -3,7 +3,12 @@ from typing import Any
 import pytest
 
 from benchmarks.hybridgym_verifyrepair.build_candidates import build_candidates
-from benchmarks.hybridgym_verifyrepair.judge_eval import parse_verdict, score
+from benchmarks.hybridgym_verifyrepair.judge_eval import (
+    final_answer,
+    parse_verdict,
+    score,
+)
+from benchmarks.hybridgym_verifyrepair.run_infer import request_verdict
 
 
 @pytest.mark.parametrize(
@@ -87,3 +92,61 @@ def test_build_candidates_paired():
         kind = "good" if r["candidate_resolved"] else "bad"
         assert r["candidate_patch"] == kind + str(r["instance_id"]).split("__")[1]
     assert rows == build_candidates(sources, 0.5, None, paired=True)
+
+
+def _message(source: str, text: str) -> dict[str, Any]:
+    return {
+        "kind": "MessageEvent",
+        "source": source,
+        "llm_message": {"content": [{"type": "text", "text": text}]},
+    }
+
+
+def test_final_answer_takes_the_last_finish_or_agent_message():
+    finish = _row("x", "VERDICT: INCORRECT")["history"]
+    assert final_answer(finish) == "VERDICT: INCORRECT"
+    # Answered with a plain message instead of calling finish.
+    assert final_answer(finish + [_message("agent", "VERDICT: CORRECT")]) == (
+        "VERDICT: CORRECT"
+    )
+    # The last action is a tool call that is not finish: no answer yet.
+    assert final_answer(_row("x", None)["history"]) == ""
+
+
+class _Event:
+    def __init__(self, data: dict[str, Any]):
+        self.data = data
+
+    def model_dump(self, mode: str) -> dict[str, Any]:
+        return self.data
+
+
+class _FakeConversation:
+    """Replies to each reminder with the next canned agent message."""
+
+    def __init__(self, first_answer: str, replies: list[str]):
+        self.state = self
+        self.events = [_Event(_message("agent", first_answer))]
+        self.replies = replies
+        self.sent: list[str] = []
+
+    def send_message(self, text: str) -> None:
+        self.sent.append(text)
+        self.events.append(_Event(_message("user", text)))
+
+    def run(self) -> None:
+        self.events.append(_Event(_message("agent", self.replies.pop(0))))
+
+
+@pytest.mark.parametrize(
+    "first, replies, n_sent",
+    [
+        ("Looks right.\nVERDICT: CORRECT", [], 0),
+        ("Looks right.", ["VERDICT: CORRECT"], 1),
+        ("Looks right.", ["Done.", "Still done."], 2),  # gives up after two
+    ],
+)
+def test_request_verdict(first: str, replies: list[str], n_sent: int):
+    conversation = _FakeConversation(first, replies)
+    request_verdict(conversation)  # pyright: ignore[reportArgumentType]
+    assert len(conversation.sent) == n_sent

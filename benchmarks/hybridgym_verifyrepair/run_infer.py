@@ -29,6 +29,11 @@ from typing import List, Protocol
 
 from pydantic import Field
 
+from benchmarks.hybridgym_verifyrepair.judge_eval import (
+    VERDICT_REMINDER,
+    final_answer,
+    parse_verdict,
+)
 from benchmarks.r2egym.config import INFER_DEFAULTS as R2EGYM_DEFAULTS
 from benchmarks.r2egym.run_infer import R2EGymEvaluation
 from benchmarks.swebench.config import INFER_DEFAULTS as SWEBENCH_DEFAULTS
@@ -42,6 +47,7 @@ from benchmarks.utils.evaluation_utils import (
 from benchmarks.utils.llm_config import load_llm_config
 from benchmarks.utils.models import EvalInstance, EvalMetadata
 from openhands.sdk import get_logger
+from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.workspace import RemoteWorkspace
 
 
@@ -51,6 +57,7 @@ HARNESS_DEFAULTS = {"swebench": SWEBENCH_DEFAULTS, "r2egym": R2EGYM_DEFAULTS}
 # Default prompt and output-directory prefix of each task.
 TASK_PROMPTS = {"repair": "default.j2", "judge": "judge.j2"}
 TASK_DIR_PREFIX = {"repair": "verifyrepair", "judge": "verifyjudge"}
+MAX_VERDICT_REMINDERS = 2
 CANDIDATE_PATH_IN_CONTAINER = "/tmp/candidate.patch"
 
 
@@ -107,6 +114,21 @@ def apply_candidate(workspace: _Workspace, repo_path: str, patch: str) -> None:
         raise RuntimeError(f"Candidate patch did not apply: {res.stderr[:500]}")
 
 
+def request_verdict(conversation: RemoteConversation) -> None:
+    """Judge task: remind the agent (at most twice) if it stopped without a verdict.
+
+    Each reminder gets a single run, so an agent that answers with a plain message
+    instead of calling ``finish`` is not pushed on by fake user responses.
+    """
+    for _ in range(MAX_VERDICT_REMINDERS):
+        history = [e.model_dump(mode="json") for e in conversation.state.events]
+        if parse_verdict(final_answer(history)) is not None:
+            return
+        logger.info("No verdict line; sending a reminder")
+        conversation.send_message(VERDICT_REMINDER)
+        conversation.run()
+
+
 def _with_candidates(
     instances: List[EvalInstance], candidates: dict[str, str]
 ) -> List[EvalInstance]:
@@ -120,6 +142,7 @@ def _with_candidates(
 
 class SWEBenchVerifyRepair(SWEBenchEvaluation):
     candidates: dict[str, str] = Field(default_factory=dict)
+    task: str = "repair"
 
     def prepare_instances(self) -> List[EvalInstance]:
         return _with_candidates(super().prepare_instances(), self.candidates)
@@ -129,9 +152,14 @@ class SWEBenchVerifyRepair(SWEBenchEvaluation):
     ) -> None:
         apply_candidate(workspace, repo_path, self.candidates[instance.id])
 
+    def after_conversation(self, conversation: RemoteConversation) -> None:
+        if self.task == "judge":
+            request_verdict(conversation)
+
 
 class R2EGymVerifyRepair(R2EGymEvaluation):
     candidates: dict[str, str] = Field(default_factory=dict)
+    task: str = "repair"
     # The hidden tests would let the agent grade the candidate directly.
     hide_eval_artifacts: bool = True
 
@@ -142,6 +170,10 @@ class R2EGymVerifyRepair(R2EGymEvaluation):
         self, workspace: RemoteWorkspace, instance: EvalInstance, repo_path: str
     ) -> None:
         apply_candidate(workspace, repo_path, self.candidates[instance.id])
+
+    def after_conversation(self, conversation: RemoteConversation) -> None:
+        if self.task == "judge":
+            request_verdict(conversation)
 
 
 def main() -> None:
@@ -237,6 +269,7 @@ def main() -> None:
             metadata=metadata,
             num_workers=args.num_workers,
             candidates=candidates,
+            task=args.task,
             keep_base_image=args.keep_base_image,
         )
     else:
@@ -244,6 +277,7 @@ def main() -> None:
             metadata=metadata,
             num_workers=args.num_workers,
             candidates=candidates,
+            task=args.task,
         )
 
     evaluator.run(on_result=get_default_on_result_writer(evaluator.output_path))

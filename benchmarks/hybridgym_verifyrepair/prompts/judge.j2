@@ -5,7 +5,7 @@ I have access to a python code repository in the directory {{ instance.repo_path
 </issue_description>
 
 A previous attempt to resolve this issue left uncommitted changes in the repository (run `git diff` in {{ instance.repo_path }} to see them).
-Your task is to decide whether these changes resolve the issue. Do not fix the changes or modify any existing file in the repository: only judge the changes as they are.
+Your task is to decide whether these changes resolve the issue. Do not fix the changes or modify any existing file in the repository: only judge the changes as they are. You give your answer with the finish tool (see Phase 4).
 The development Python environment is already set up for you (the `python` on your PATH has all dependencies installed), so do not install or reinstall packages.
 
 Follow these phases:
@@ -18,7 +18,7 @@ Phase 2. REPRODUCTION: write a small script `reproduce_issue.py` that exercises 
 
 Phase 3. EDGE CASES: if the script passes, add the other examples and edge cases from the issue, and check other code paths that need the same change. Then run the existing tests for the changed code to check that the changes do not break them.
 
-Phase 4. VERDICT: delete `reproduce_issue.py` and any other files you created, then finish. Your final message must give a short justification based on what you ran and end with exactly one of these lines:
+Phase 4. ANSWER: delete `reproduce_issue.py` and any other files you created, then call the finish tool. Its message must give a short justification based on what you ran, and its last line must be exactly one of these two lines:
 VERDICT: CORRECT
 VERDICT: INCORRECT
 Answer CORRECT only if the changes fully resolve the issue without breaking existing behavior.

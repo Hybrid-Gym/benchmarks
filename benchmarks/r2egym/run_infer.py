@@ -45,6 +45,7 @@ from benchmarks.utils.version import get_phased_image_tag_prefix
 from openhands.sdk import Agent, Conversation, Tool, get_logger
 from openhands.sdk.agent import ACPAgent
 from openhands.sdk.context.condenser import LLMSummarizingCondenser
+from openhands.sdk.conversation import RemoteConversation
 from openhands.sdk.workspace import RemoteWorkspace
 from openhands.tools.delegate import DelegateTool
 from openhands.workspace import APIRemoteWorkspace, ApptainerWorkspace, DockerWorkspace
@@ -211,6 +212,13 @@ class R2EGymEvaluation(Evaluation):
         self, workspace: RemoteWorkspace, instance: EvalInstance, repo_path: str
     ) -> None:
         """Hook: modify the repository after it is reset, before the agent starts.
+
+        No-op for the full task; subtasks (e.g. verify-and-repair) override it.
+        """
+
+    def after_conversation(self, conversation: RemoteConversation) -> None:
+        """Hook: continue the conversation after the agent finished, before the
+        patch is taken.
 
         No-op for the full task; subtasks (e.g. verify-and-repair) override it.
         """
@@ -524,6 +532,7 @@ class R2EGymEvaluation(Evaluation):
             conversation.send_message(instruction)
             # Run conversation with fake user responses to handle agent messages
             run_conversation_with_fake_user_response(conversation)
+            self.after_conversation(conversation)
 
         # Drop test-run byproducts the agent created (pyc / caches) so they don't
         # leak into the patch on repos that don't gitignore them.

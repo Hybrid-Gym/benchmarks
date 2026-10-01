@@ -1,15 +1,18 @@
 """Score ``--task judge`` rollouts: does the agent's verdict match the candidate's grade?
 
 The verdict is the last ``VERDICT: CORRECT`` / ``VERDICT: INCORRECT`` line of the
-agent's final ``finish`` message; a missing verdict counts as wrong. The label is the
-candidate's ``candidate_resolved`` field (its grade from the benchmark's own grader).
+agent's final answer (its last ``finish`` message, or its last plain message if it
+answered without calling ``finish``); a missing verdict counts as wrong. The label is
+the candidate's ``candidate_resolved`` field (its grade from the benchmark's own
+grader).
 
 The report is written next to ``output.jsonl`` as ``output.report.json``.
 ``resolved_ids`` lists the instances with a correct verdict, which is what
 ``convert_and_push`` reads as ``resolved``. Two filter flags are recorded per
-instance: ``ran_code`` (the agent ran Python or a test runner at least once) and
+instance: ``ran_code`` (the agent ran Python or a test runner at least once),
 ``patch_unchanged`` (the final diff still equals the candidate, i.e. the agent did
-not edit the code it was asked to judge or leave files behind).
+not edit the code it was asked to judge or leave files behind) and
+``user_followups`` (messages sent after the task, e.g. reminders to give a verdict).
 
 Usage:
     uv run hybridgym-verifyrepair-judge-eval <output.jsonl> --candidates cand.jsonl
@@ -28,6 +31,11 @@ from benchmarks.utils.patch_utils import remove_noise_from_patch
 VERDICT_RE = re.compile(
     r"^[\s*_`#>-]*VERDICT[*_`]*\s*:[\s*_`]*(CORRECT|INCORRECT)\b",
     re.IGNORECASE | re.MULTILINE,
+)
+# Sent (at most twice) when the agent stops without a verdict line.
+VERDICT_REMINDER = (
+    "Your final answer has no verdict line. Call the finish tool now; the last line "
+    "of its message must be exactly one of:\nVERDICT: CORRECT\nVERDICT: INCORRECT"
 )
 CODE_RUN_RE = re.compile(
     r"(^|[;&|(]\s*|\s)(python3?|pytest|py\.test|tox|\S*runtests\.py|bin/test)(\s|$)"
@@ -50,10 +58,31 @@ def _actions(row: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
-def final_message(row: dict[str, Any]) -> str:
-    """Message of the agent's last ``finish`` call ('' if it never finished)."""
-    messages = [a.get("message") or "" for t, a in _actions(row) if t == "finish"]
-    return messages[-1] if messages else ""
+def final_answer(history: list[dict[str, Any]]) -> str:
+    """The agent's last ``finish`` message or plain message, whichever came last.
+
+    Returns '' if the agent's last action was a tool call other than ``finish``.
+    """
+    for event in reversed(history):
+        kind = event.get("kind")
+        if kind == "ActionEvent":
+            if event.get("tool_name") == "finish":
+                return (event.get("action") or {}).get("message") or ""
+            return ""
+        if kind == "MessageEvent" and event.get("source") == "agent":
+            content = (event.get("llm_message") or {}).get("content") or []
+            return "\n".join(c.get("text") or "" for c in content)
+    return ""
+
+
+def user_followups(history: list[dict[str, Any]]) -> int:
+    """Number of user messages after the task instruction."""
+    users = [
+        e
+        for e in history
+        if e.get("kind") == "MessageEvent" and e.get("source") == "user"
+    ]
+    return max(len(users) - 1, 0)
 
 
 def ran_code(row: dict[str, Any]) -> bool:
@@ -84,7 +113,8 @@ def score(
         row = last[iid]
         candidate = candidates[iid]
         label = bool(candidate["candidate_resolved"])
-        verdict = parse_verdict(final_message(row))
+        history = row.get("history") or []
+        verdict = parse_verdict(final_answer(history))
         patch = (row.get("test_result") or {}).get("git_patch") or ""
         results.append(
             {
@@ -95,6 +125,7 @@ def score(
                 "ran_code": ran_code(row),
                 "patch_unchanged": _changed_lines(patch)
                 == _changed_lines(candidate["candidate_patch"]),
+                "user_followups": user_followups(history),
                 "error": bool(row.get("error")),
             }
         )
@@ -109,6 +140,7 @@ def score(
         "confusion": dict(sorted(confusion.items())),
         "ran_code": sum(r["ran_code"] for r in results),
         "patch_unchanged": sum(r["patch_unchanged"] for r in results),
+        "no_user_followups": sum(r["user_followups"] == 0 for r in results),
         "resolved_ids": resolved_ids,
         "results": results,
     }
