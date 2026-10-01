@@ -2,6 +2,11 @@ Verify-and-Repair (Gaokai Zhang)
 You can take the implementation of our current r2egym task (`benchmarks/r2egym/`) and `benchmarks/hybridgym_verifyrepair/` (already runs on R2E-Gym) as a reference.
 Task description: given an issue and a repo where a previous attempt at fixing it is left as an uncommitted change, the agent needs to check by running code whether the change fixes the issue, and repair it if not
 
+Agreed with Yiqing (2026-10-01): start from our graded R2E-Gym rollouts (their patches + docker images) and build two tasks
+Task 1 (judge, `--task judge`): the agent only decides whether the patch is correct and ends with `VERDICT: CORRECT/INCORRECT`; `judge_eval.py` compares it with the patch's resolved label. Candidates: instances that have both a correct and a wrong patch, half of them get the correct one (`build_candidates.py --paired --correct-fraction 0.5`)
+Task 2 (judge + fix, `--task repair`): the variances below; the final diff is graded with the R2E-Gym eval
+First test both on a small scale with free models
+
 Variance 1 (done): neutral prompt
 Task description: the prompt says the previous attempt may be correct, incomplete or wrong. About 90% of the candidates are wrong and 10% correct
 Result: 18/90 resolved on R2E-Gym; in 37% of the runs the agent kept the wrong candidate unchanged
