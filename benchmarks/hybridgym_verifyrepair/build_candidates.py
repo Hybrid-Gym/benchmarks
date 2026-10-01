@@ -12,6 +12,10 @@ so the agent also sees attempts that only need verifying. All choices are a
 deterministic function of the instance id, and ``--max-per-repo`` limits pool skew
 (R2E-Gym-Lite is about half numpy).
 
+``--paired`` (for ``--task judge``, typically with ``--correct-fraction 0.5``) only
+uses instances that have both a flawed and a correct patch, and picks which kind
+each instance gets, so the label cannot be guessed from the issue alone.
+
 Usage:
     uv run python -m benchmarks.hybridgym_verifyrepair.build_candidates \\
         --source gpt5mini=<run_dir> --source dv4f=<run_dir> \\
@@ -76,6 +80,7 @@ def build_candidates(
     correct_fraction: float,
     max_per_repo: int | None,
     select: set[str] | None = None,
+    paired: bool = False,
 ) -> list[dict[str, object]]:
     """Pick one candidate per instance; see the module docstring."""
     flawed: dict[str, list[tuple[str, str]]] = {}
@@ -100,16 +105,28 @@ def build_candidates(
         per_repo[repo] += 1
         return True
 
-    # Flawed candidates take the per-repo slots first; correct ones then fill up to
-    # the target fraction of the (capped) flawed count within the same caps.
-    chosen = [(iid, False, flawed[iid]) for iid in _by_hash(flawed) if fits(iid)]
-    n_correct = round(correct_fraction * len(chosen) / (1 - correct_fraction))
-    for iid in _by_hash(set(correct) - set(flawed)):
-        if n_correct == 0:
-            break
-        if fits(iid):
-            chosen.append((iid, True, correct[iid]))
-            n_correct -= 1
+    chosen: list[tuple[str, bool, list[tuple[str, str]]]]
+    if paired:
+        ids = [iid for iid in _by_hash(set(flawed) & set(correct)) if fits(iid)]
+        n_correct = round(correct_fraction * len(ids))
+        correct_ids = set(sorted(ids, key=lambda i: _unit("label:" + i))[:n_correct])
+        chosen = [
+            (iid, True, correct[iid])
+            if iid in correct_ids
+            else (iid, False, flawed[iid])
+            for iid in ids
+        ]
+    else:
+        # Flawed candidates take the per-repo slots first; correct ones then fill up
+        # to the target fraction of the (capped) flawed count within the same caps.
+        chosen = [(iid, False, flawed[iid]) for iid in _by_hash(flawed) if fits(iid)]
+        n_correct = round(correct_fraction * len(chosen) / (1 - correct_fraction))
+        for iid in _by_hash(set(correct) - set(flawed)):
+            if n_correct == 0:
+                break
+            if fits(iid):
+                chosen.append((iid, True, correct[iid]))
+                n_correct -= 1
 
     rows: list[dict[str, object]] = []
     for iid, is_correct, pool in sorted(chosen, key=lambda c: _unit("order:" + c[0])):
@@ -139,6 +156,11 @@ def main() -> None:
     parser.add_argument("--select", help="Only use instance ids listed in this file")
     parser.add_argument("--correct-fraction", type=float, default=0.1)
     parser.add_argument("--max-per-repo", type=int, default=None)
+    parser.add_argument(
+        "--paired",
+        action="store_true",
+        help="Only instances with both a flawed and a correct patch (judge task)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="Keep the first N rows")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
@@ -150,7 +172,9 @@ def main() -> None:
     select = None
     if args.select:
         select = {x.strip() for x in open(args.select) if x.strip()}
-    rows = build_candidates(sources, args.correct_fraction, args.max_per_repo, select)
+    rows = build_candidates(
+        sources, args.correct_fraction, args.max_per_repo, select, args.paired
+    )
     if args.limit is not None:
         rows = rows[: args.limit]
 

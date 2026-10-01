@@ -1,0 +1,24 @@
+I have access to a python code repository in the directory {{ instance.repo_path }} . You can explore files and run code using the available tools. Consider the following issue description:
+
+<issue_description>
+{{ instance.problem_statement }}
+</issue_description>
+
+A previous attempt to resolve this issue left uncommitted changes in the repository (run `git diff` in {{ instance.repo_path }} to see them).
+Your task is to decide whether these changes resolve the issue. Do not fix the changes or modify any existing file in the repository: only judge the changes as they are.
+The development Python environment is already set up for you (the `python` on your PATH has all dependencies installed), so do not install or reinstall packages.
+
+Follow these phases:
+
+Phase 1. READING: restate the issue in clear terms (the behavior it reports and the behavior it expects), then read the current changes with `git diff` and explain what they do.
+
+Phase 2. REPRODUCTION: write a small script `reproduce_issue.py` that exercises the behavior described in the issue and checks the expected result with assertions. Run it against the current code.
+   2.1 The script must import the repository's own code (not a copy of it) and must actually run. A script that crashes for an unrelated reason (import error, typo, wrong setup) tells you nothing: fix the script first.
+   2.2 A syntax check or an import check is not a reproduction.
+
+Phase 3. EDGE CASES: if the script passes, add the other examples and edge cases from the issue, and check other code paths that need the same change. Then run the existing tests for the changed code to check that the changes do not break them.
+
+Phase 4. VERDICT: delete `reproduce_issue.py` and any other files you created, then finish. Your final message must give a short justification based on what you ran and end with exactly one of these lines:
+VERDICT: CORRECT
+VERDICT: INCORRECT
+Answer CORRECT only if the changes fully resolve the issue without breaking existing behavior.

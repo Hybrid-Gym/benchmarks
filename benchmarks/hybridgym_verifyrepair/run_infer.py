@@ -1,17 +1,23 @@
 """Verify-and-repair: check a pre-applied candidate patch and fix it if needed.
 
 A candidate patch for the issue (e.g. a weaker model's failed attempt) is applied to
-the repository as an uncommitted change before the agent starts. The agent has to
-decide, by running code, whether it resolves the issue and repair it if not. The
-final diff (candidate plus the agent's edits, relative to the base commit) is graded
-by the underlying benchmark's own harness, so this task needs no grader of its own.
+the repository as an uncommitted change before the agent starts. Two tasks share
+this setup:
+
+- ``--task repair``: the agent decides, by running code, whether the candidate
+  resolves the issue and repairs it if not. The final diff (candidate plus the
+  agent's edits, relative to the base commit) is graded by the underlying
+  benchmark's own harness.
+- ``--task judge``: the agent only decides whether the candidate resolves the issue
+  and ends with a ``VERDICT:`` line, which ``judge_eval`` compares with the
+  candidate's known grade.
 
 Candidates are a JSONL file with one row per instance: ``{"instance_id": ...,
 "candidate_patch": ...}`` plus optional provenance fields, which are ignored here.
 
 Usage:
     uv run hybridgym-verifyrepair-infer <llm_config> --harness r2egym \\
-        --candidates candidates.jsonl --workspace docker
+        --task judge --candidates candidates.jsonl --workspace docker
 """
 
 import argparse
@@ -42,6 +48,9 @@ from openhands.sdk.workspace import RemoteWorkspace
 logger = get_logger(__name__)
 
 HARNESS_DEFAULTS = {"swebench": SWEBENCH_DEFAULTS, "r2egym": R2EGYM_DEFAULTS}
+# Default prompt and output-directory prefix of each task.
+TASK_PROMPTS = {"repair": "default.j2", "judge": "judge.j2"}
+TASK_DIR_PREFIX = {"repair": "verifyrepair", "judge": "verifyjudge"}
 CANDIDATE_PATH_IN_CONTAINER = "/tmp/candidate.patch"
 
 
@@ -138,7 +147,8 @@ class R2EGymVerifyRepair(R2EGymEvaluation):
 def main() -> None:
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--harness", choices=sorted(HARNESS_DEFAULTS), default="r2egym")
-    harness = pre.parse_known_args()[0].harness
+    pre.add_argument("--task", choices=sorted(TASK_PROMPTS), default="repair")
+    pre_args = pre.parse_known_args()[0]
 
     parser = get_parser()
     add_prompt_path_argument(parser, __file__)
@@ -147,6 +157,12 @@ def main() -> None:
         choices=sorted(HARNESS_DEFAULTS),
         default="r2egym",
         help="Benchmark whose images, dataset and grader the task runs on",
+    )
+    parser.add_argument(
+        "--task",
+        choices=sorted(TASK_PROMPTS),
+        default="repair",
+        help="repair: verify and fix the candidate; judge: only give a verdict",
     )
     parser.add_argument(
         "--candidates",
@@ -158,7 +174,11 @@ def main() -> None:
         action="store_true",
         help="swebench harness, docker workspace: keep official base images",
     )
-    parser.set_defaults(**HARNESS_DEFAULTS[harness])
+    parser.set_defaults(**HARNESS_DEFAULTS[pre_args.harness])
+    prompt_dir = Path(__file__).parent / "prompts"
+    parser.set_defaults(
+        prompt_path=str((prompt_dir / TASK_PROMPTS[pre_args.task]).resolve())
+    )
     args = parser.parse_args()
 
     if args.n_critic_runs < 1:
@@ -170,7 +190,7 @@ def main() -> None:
     structured_output_dir = construct_eval_output_dir(
         base_dir=args.output_dir,
         dataset_name=(
-            f"verifyrepair-{Path(args.candidates).stem}-"
+            f"{TASK_DIR_PREFIX[args.task]}-{Path(args.candidates).stem}-"
             f"{args.dataset.replace('/', '__')}-{args.split.replace('/', '__')}"
         ),
         model_name=llm.model,
@@ -191,7 +211,11 @@ def main() -> None:
         dataset_split=args.split,
         max_iterations=args.max_iterations,
         eval_output_dir=structured_output_dir,
-        details={"task": "verifyrepair", "candidates": args.candidates},
+        details={
+            "task": "verifyrepair",
+            "subtask": args.task,
+            "candidates": args.candidates,
+        },
         prompt_path=args.prompt_path,
         eval_limit=args.n_limit,
         env_setup_commands=["export PIP_CACHE_DIR=~/.cache/pip"],
