@@ -11,6 +11,7 @@ controlled length. Three families, plus a rebuild of A:
 | A+ `withthink` | `_text0_withthink` (= `_text0x`), `_text20_withthink`, `_text50_withthink`, `_text100_withthink`, `_text300_withthink` | kept verbatim | none, or family A's text: ~20 / 50 / 100 / 300 tokens for every turn |
 | D `textcov` (claude45 only) | `_textcov0`, `_textcov20`, `_textcov40`, `_textcov60`, `_textcov80`, `_textcov100` | kept verbatim | the original prose, on 0-100 % of the turns (40 % = the base) |
 | C `think` | `_text0x_think0x`, `_text0.5x_think0.5x`, `_text2x_think2x`, `_text4x_think4x`, `_text8x_think8x`, `_text32x_think32x` | task_tracker kept verbatim; think turns rephrased (their prose and their `thought`), removed at 0× | family B's prose, plus each think turn's prose and thought at the same multiple of their own lengths |
+| C control (claude45 only) | `_text1x_think0x` | task_tracker kept verbatim; think turns removed, with their result turns | the original prose, verbatim (no LLM) |
 
 Sources: `synthetic-code-training/func_localize_claude45_1457i` and
 `synthetic-code-training/r2egym_qwen3next80b_1500i`; outputs are `<base>_<variant>` in the same
@@ -131,6 +132,7 @@ content"): family B plus the `think` turns.
 | `build_variants.py` | assemble a family's variants, validate, save to disk, push with a dataset card |
 | `fill_prose.py` | write a comment for every empty turn, one request per trajectory (family D) |
 | `build_coverage.py` | build / validate / push the `_textcov<N>` levels from the base and the fills |
+| `build_text1x_think0x.py` | build / validate / push `_text1x_think0x`: the base minus its think turns (no LLM) |
 | `dedupe_parts.py` | remove repeated sentences from one rung of a finished run, topping up versions that fall under their band |
 | `run_pipeline.sh` | tmux runner: rephrase → build → push per dataset, `FAMILY=fixed|scaled|think`, `KEYS` for a subset of rungs / the added x32 rung, re-entrant |
 
@@ -444,6 +446,14 @@ Its first push went to `_text4x_think4x` itself, because `build_variants` left t
 (fixed); that repo was restored to its 2026-09-28 revision (byte-identical, 10 minutes after the overwrite).
 Qwen3-Next-80B pushed 2026-09-30 09:02Z (think x2/x4: 7 476 units, 0 errors), validated the same way: 1 457 rows, 0 structural
 mismatches, 0 reply markup, 0 meta-language; `_text4x_think4x` untouched since the restore.
+
+### Control `_text1x_think0x` (claude45, 2026-10-01)
+
+`_text0x_think0x` removes the think turns and all prose at once; `func_localize_claude45_1457i_text1x_think0x`
+removes only the think turns (3 738, with their results, and the prose inside those turns), so the prose and the
+task_tracker turns stay byte-identical to the base. Assistant turns 30 615 → 26 877, tokens per trajectory (no system
+prompt) 20 132 → 19 166. Validated fresh from HF: 1 457 rows, every row equals the base minus its think pairs, 0 think
+calls or results left, the same tool calls and results as `_text0x_think0x` in every row, 10 616 turns keep their prose.
 
 ## Usage
 
