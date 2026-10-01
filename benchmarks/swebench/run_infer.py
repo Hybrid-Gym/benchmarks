@@ -13,6 +13,7 @@ from benchmarks.swebench.build_images import (
     wrap_image,
 )
 from benchmarks.swebench.config import INFER_DEFAULTS
+from benchmarks.swebench.testbed_env import build_testbed_env_command
 from benchmarks.utils.acp import (
     add_acp_agent_metadata,
     build_acp_agent,
@@ -128,8 +129,27 @@ class SWEBenchEvaluation(Evaluation):
       - evaluate_instance(instance, workspace)
     """
 
+    # Activate the `testbed` env for the agent's shells and point its editable
+    # install at the agent's working copy (see testbed_env.py). Without this the
+    # agent runs the base interpreter and cannot execute repository code.
+    testbed_env: bool = True
+    # Keep the official per-instance base image after a docker run instead of
+    # deleting it (the local SWE-bench grader reuses those images).
+    keep_base_image: bool = False
+
     def get_official_docker_image(self, instance: EvalInstance) -> str:
         return get_official_docker_image(instance.id)
+
+    def get_repo_path(self, instance: EvalInstance) -> str:
+        return f"/workspace/{instance.data['repo'].split('/')[-1]}/"
+
+    def prepare_repo(
+        self, workspace: RemoteWorkspace, instance: EvalInstance, repo_path: str
+    ) -> None:
+        """Hook: modify the repository after it is reset, before the agent starts.
+
+        No-op for the full task; subtasks (e.g. verify-and-repair) override it.
+        """
 
     def extract_custom_tag(self, official_docker_image: str) -> str:
         return extract_custom_tag(official_docker_image)
@@ -285,6 +305,13 @@ class SWEBenchEvaluation(Evaluation):
                     f"Failed to run env setup command '{cmd}': {res.stderr}"
                 )
             logger.debug(f"Ran env setup command '{cmd}': {res.stdout}")
+
+        if self.testbed_env:
+            res = workspace.execute_command(
+                build_testbed_env_command(self.get_repo_path(instance))
+            )
+            if res.exit_code != 0:
+                raise RuntimeError(f"Failed to set up testbed env: {res.stderr}")
         return workspace
 
     # ---- Hook: reclaim per-instance disk after each instance ---------------------
@@ -330,7 +357,8 @@ class SWEBenchEvaluation(Evaluation):
         if image_id:
             images_to_remove.append(image_id)
         try:
-            images_to_remove.append(self.get_official_docker_image(instance))
+            if not self.keep_base_image:
+                images_to_remove.append(self.get_official_docker_image(instance))
         except Exception as e:
             logger.warning(
                 "[cleanup] could not resolve base image for %s: %s", instance.id, e
@@ -407,7 +435,7 @@ class SWEBenchEvaluation(Evaluation):
 
         setup_acp_workspace(self.metadata.agent_type, workspace)
 
-        repo_path = f"/workspace/{instance.data['repo'].split('/')[-1]}/"
+        repo_path = self.get_repo_path(instance)
         instance.data["repo_path"] = repo_path
 
         persist_callback = build_event_persistence_callback(
@@ -436,6 +464,7 @@ class SWEBenchEvaluation(Evaluation):
         # git reset
         git_reset = workspace.execute_command(f"cd {repo_path} ; git reset --hard")
         assert git_reset.exit_code == 0, f"git reset failed: {git_reset.stderr}"
+        self.prepare_repo(workspace, instance, repo_path)
 
         instruction = get_instruction(
             instance=instance.data,
@@ -500,6 +529,17 @@ class SWEBenchEvaluation(Evaluation):
 def main() -> None:
     parser = get_parser()
     add_prompt_path_argument(parser, __file__)
+    parser.add_argument(
+        "--no-testbed-env",
+        dest="testbed_env",
+        action="store_false",
+        help="Do not activate the testbed env for the agent (pre-2026-09-27 behavior)",
+    )
+    parser.add_argument(
+        "--keep-base-image",
+        action="store_true",
+        help="Docker workspace: keep the official base image after each instance",
+    )
     parser.set_defaults(**INFER_DEFAULTS)
     args = parser.parse_args()
 
@@ -539,7 +579,7 @@ def main() -> None:
         dataset_split=args.split,
         max_iterations=args.max_iterations,
         eval_output_dir=structured_output_dir,
-        details={},
+        details={"testbed_env": args.testbed_env},
         prompt_path=args.prompt_path,
         eval_limit=args.n_limit,
         env_setup_commands=["export PIP_CACHE_DIR=~/.cache/pip"],
@@ -560,6 +600,8 @@ def main() -> None:
     evaluator = SWEBenchEvaluation(
         metadata=metadata,
         num_workers=args.num_workers,
+        testbed_env=args.testbed_env,
+        keep_base_image=args.keep_base_image,
     )
 
     evaluator.run(on_result=get_default_on_result_writer(evaluator.output_path))

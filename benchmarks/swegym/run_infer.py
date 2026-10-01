@@ -31,6 +31,10 @@ logger = get_logger(__name__)
 class SWEGymEvaluation(SWEBenchEvaluation):
     """SWE-bench rollout over the SWE-Gym base images."""
 
+    # Not yet validated on SWE-Gym images (meson-python editable pandas installs
+    # are not repointed by testbed_env), so keep the historical behavior.
+    testbed_env: bool = False
+
     def get_official_docker_image(self, instance: EvalInstance) -> str:
         return get_official_docker_image(instance.id)
 

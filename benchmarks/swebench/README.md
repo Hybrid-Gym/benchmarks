@@ -230,6 +230,17 @@ uv run swebench-infer path/to/llm_config.json \
 
 In `apptainer` mode, SWE-Bench uses pre-built registry images as-is and does not run local Docker builds.
 
+### Agent Python environment (`testbed`)
+
+Since 2026-09-27 `swebench-infer` activates the SWE-bench `testbed` conda env for the agent's
+shells and points its editable install at the agent's working copy (`/workspace/<repo>`), see
+`testbed_env.py`. Before, the agent (which runs as `openhands`) got the base conda interpreter
+without the repository's dependencies, so most attempts to run code or tests failed with
+`ModuleNotFoundError`. This changes agent behavior, so compare runs only within one setting; the
+setting is recorded as `details.testbed_env` in `metadata.json`, and `--no-testbed-env`
+reproduces the old behavior. With `--workspace docker`, `--keep-base-image` keeps the official
+per-instance base images (which the local grader reuses) instead of deleting them.
+
 ## Evaluation
 
 After running inference (with either workspace type), evaluate the generated patches using the official SWE-Bench evaluation:
