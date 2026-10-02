@@ -40,6 +40,24 @@ For the judge task, use `--paired --correct-fraction 0.5`: only instances that h
 and a correct patch are used, and half of them get the correct one, so the label cannot be guessed
 from the issue.
 
+### Re-grading the labels
+
+Re-grade the candidates once and keep only trustworthy labels (`relabel_candidates.py`). In a
+pilot, 3 of 131 labels changed on re-grade (flaky tests), and 18 of 99 flawed patches were
+"unresolved" only because tests that also fail at the base commit and with the reference fix
+(e.g. aiohttp's C-parser tests) passed or did not run with them: R2E-Gym's reward requires every
+test status to match, but those patches fail no test that should pass.
+
+```bash
+uv run python -m benchmarks.hybridgym_verifyrepair.relabel_candidates preds \
+    --candidates candidates.jsonl --out preds.jsonl
+uv run r2egym-eval preds.jsonl --output-file regrade.report.json
+uv run python -m benchmarks.hybridgym_verifyrepair.relabel_candidates filter \
+    --candidates candidates.jsonl --report regrade.report.json --out candidates.relabeled.jsonl
+```
+
+Flawed candidates that are kept carry `failing_tests` (the tests expected to pass that they fail).
+
 The teacher can only produce useful trajectories on instances it can solve. In our pilot,
 flawed candidates on instances the teacher cannot solve from scratch were almost never repaired,
 so restrict candidates to teacher-solvable instances where possible.
@@ -58,6 +76,9 @@ uv run r2egym-eval <output.jsonl>
 uv run hybridgym-verifyrepair-infer .llm_config/teacher.json --harness r2egym --task judge \
     --candidates judge_candidates.jsonl --workspace docker --max-iterations 60
 uv run hybridgym-verifyrepair-judge-eval <output.jsonl> --candidates judge_candidates.jsonl
+# Keep only matching verdicts the agent's own runs support (LLM check, sees the reference fix)
+uv run python -m benchmarks.hybridgym_verifyrepair.reason_check <output.jsonl> \
+    --candidates judge_candidates.jsonl --llm-config .llm_config/checker.json
 
 # SWE-bench-format instances (validation only; never train on SWE-bench Verified)
 uv run hybridgym-verifyrepair-infer .llm_config/teacher.json --harness swebench \
@@ -69,4 +90,14 @@ The output directory name includes the task (`verifyrepair-` / `verifyjudge-`) a
 file name, so different tasks and candidate sets never share (and resume from) one directory.
 `judge_eval` writes `output.report.json` next to `output.jsonl`; its `resolved_ids` are the
 instances with a correct verdict, and each result also records `ran_code` and `patch_unchanged`
-(the agent left the candidate as it was) for filtering trajectories.
+(the agent left the candidate as it was) for filtering trajectories. `reason_check` then asks an
+LLM, for each correct verdict, whether one of the agent's runs supports it and whether its stated
+reason is right; `resolved_ids` keeps only those with both (the earlier list is kept as
+`verdict_correct_ids`). In a pilot it rejected 4 of 12 qwen3-next-80b trajectories (e.g. a correct
+verdict for a wrong reason) and none of 11 kimi-k2.5 ones. With a thinking checker model keep the
+default `max_tokens` of 16000; at 4000 its answers came back empty.
+
+Both prompts tell the agent that an existing test asserting exactly the behavior the issue reports
+as wrong is expected to fail after a correct fix: in about a third of the pilot pool the reference
+fix changes existing test assertions, and without this note kimi-k2.5 judged such a correct patch
+INCORRECT because "existing tests fail".

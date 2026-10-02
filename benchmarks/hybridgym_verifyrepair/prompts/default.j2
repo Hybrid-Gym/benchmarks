@@ -21,6 +21,6 @@ Phase 3. DIAGNOSIS: if the script fails, find out why the current changes do not
 
 Phase 4. FIX: edit the source code so that the issue is resolved. Make minimal, focused changes, and revert parts of the attempt that are wrong or unnecessary.
 
-Phase 5. VERIFICATION: re-run the same script until it passes, then run the existing tests for the code you changed and make sure you did not break them.
+Phase 5. VERIFICATION: re-run the same script until it passes, then run the existing tests for the code you changed. If an existing test fails, read what it asserts: a test that asserts exactly the behavior the issue reports as wrong is expected to fail after a correct fix, so do not change the fix to keep it passing; any other failing test means you broke existing behavior, so fix that.
 
 Phase 6. FINAL REVIEW: re-read the issue and the final `git diff`, and delete `reproduce_issue.py` and any other temporary files you created.

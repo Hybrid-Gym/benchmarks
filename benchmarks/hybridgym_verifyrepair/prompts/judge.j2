@@ -16,9 +16,9 @@ Phase 2. REPRODUCTION: write a small script `reproduce_issue.py` that exercises 
    2.1 The script must import the repository's own code (not a copy of it) and must actually run. A script that crashes for an unrelated reason (import error, typo, wrong setup) tells you nothing: fix the script first.
    2.2 A syntax check or an import check is not a reproduction.
 
-Phase 3. EDGE CASES: if the script passes, add the other examples and edge cases from the issue, and check other code paths that need the same change. Then run the existing tests for the changed code to check that the changes do not break them.
+Phase 3. EDGE CASES: if the script passes, add the other examples and edge cases from the issue, and check other code paths that need the same change. Then run the existing tests for the changed code. If an existing test fails, read what it asserts: a test that asserts exactly the behavior the issue reports as wrong is expected to fail with a correct fix and does not count against the changes; any other failing test means the changes break existing behavior.
 
 Phase 4. ANSWER: delete `reproduce_issue.py` and any other files you created, then call the finish tool. Its message must give a short justification based on what you ran, and its last line must be exactly one of these two lines:
 VERDICT: CORRECT
 VERDICT: INCORRECT
-Answer CORRECT only if the changes fully resolve the issue without breaking existing behavior.
+Answer CORRECT only if the changes fully resolve the issue and do not break any behavior that the issue does not ask to change.
