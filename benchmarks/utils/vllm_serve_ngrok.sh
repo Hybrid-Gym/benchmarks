@@ -81,7 +81,7 @@ start_vllm() {
 start_ngrok_tunnel() {
     echo "Starting ngrok tunnel for port $PORT ..."
 
-    ngrok http "$PORT" --config "$NGROK_CONFIG_FILE" > "$NGROK_LOG" 2>&1 &
+    /home/yiqingxi/.local/bin/ngrok http "$PORT" --config "$NGROK_CONFIG_FILE" > "$NGROK_LOG" 2>&1 &
 
     NGROK_PID=$!
     echo "ngrok PID: $NGROK_PID"

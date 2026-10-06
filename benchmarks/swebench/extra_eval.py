@@ -413,23 +413,34 @@ def get_tool_call_distribution(history, instance_id=0, duplicate_thresh=3):
                 "tail ",
                 "head ",
                 "grep ",
-                "sed ",
-                "awk ",
-                "vi ",
-                "vim ",
-                "nano ",
             ]
-            EDIT_CMD_LIST = ["sed ", "awk ", "vi ", "vim ", "nano "]
+            EDIT_CMD_LIST = ["sed ", "awk ", "vi ", "vim ", "nano ", "tee ", "patch "]
             EXECUTION_CMD_LIST = ["python ", "python3 ", "bash ", "sh ", "./"]
+            EDIT_PATTERN_LIST = [
+                ("cat ", " > "),
+                ("echo ", " > "),
+                ("echo ", " >> "),
+                ("apply_patch",),
+            ]
+            # python/bash inline write patterns: e.g. python3 -c "...open(..., 'w')..."
+            PYTHON_WRITE_PATTERNS = ["'w'", '"w"', "'a'", '"a"', ".write(", "writelines("]
 
-            if any(cmd.startswith(cmd_key) for cmd_key in READ_CMD_LIST):
-                unix_type = "unix_read"
-            elif (
-                any(cmd.startswith(cmd_key) for cmd_key in EDIT_CMD_LIST)
-                or ("cat " in cmd and " > " in cmd)
-                or ("echo " in cmd and " > " in cmd)
-            ):
+            def _is_edit_cmd(cmd):
+                if any(cmd.startswith(k) for k in EDIT_CMD_LIST):
+                    return True
+                for patterns in EDIT_PATTERN_LIST:
+                    if all(p in cmd for p in patterns):
+                        return True
+                # python/bash -c with file write
+                if (cmd.startswith("python ") or cmd.startswith("python3 ") or cmd.startswith("bash ")) and "-c" in cmd:
+                    if any(p in cmd for p in PYTHON_WRITE_PATTERNS):
+                        return True
+                return False
+
+            if _is_edit_cmd(cmd):
                 unix_type = "unix_edit"
+            elif any(cmd.startswith(cmd_key) for cmd_key in READ_CMD_LIST):
+                unix_type = "unix_read"
             elif any(cmd.startswith(cmd_key) for cmd_key in EXECUTION_CMD_LIST):
                 unix_type = "unix_exec"
             else:
@@ -499,18 +510,19 @@ def never_call_tools(history):
     no_tool_call_step_num = 0
     for i in range(1, len(history) - 1):
         turn = history[i]
-        if (
-            turn["source"] != "agent"
-            or "action" not in turn
-            or turn.get("action") is None
-        ):
+        if turn["source"] != "agent":
+            continue
+        # A MessageEvent with no action/tool_call is a genuine no-tool-call step
+        # (the harness responds with "please continue working on the task")
+        if turn.get("action") is None and turn.get("kind") == "MessageEvent":
+            no_tool_call_step_num += 1
+            continue
+        if "action" not in turn or turn.get("action") is None:
             continue
         mapped = _get_action_type(turn)
         if mapped in ("condensation", "system", None):
             continue
-        if mapped == "think":
-            no_tool_call_step_num += 1
-        else:
+        if mapped != "think":
             never_call_tools_flag = False
     return never_call_tools_flag, no_tool_call_step_num
 
@@ -732,7 +744,12 @@ if __name__ == "__main__":
 
             for tool_type, count in successful_tool_call_counts.items():
                 global_successful_tool_call_counts[tool_type] += count
-                if count > 0 and tool_type in per_instance_success_dict:
+                if tool_type == "edit":
+                    # Use any attempt (not just successful) — successful edits are already
+                    # captured by the non-empty patch count.
+                    if tool_call_counts.get("edit", 0) > 0 and tool_type in per_instance_success_dict:
+                        per_instance_success_dict[tool_type] += 1
+                elif count > 0 and tool_type in per_instance_success_dict:
                     per_instance_success_dict[tool_type] += 1
 
             infra_error_flag = False

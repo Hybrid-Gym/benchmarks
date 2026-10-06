@@ -31,7 +31,7 @@ OUTPUT_DIR=$STORAGE_DIR/benchmarks/evaluation_outputs/swe_bench_easy50_outputs/p
 REPORT_FILE=$OUTPUT_DIR/output.report.json
 
 check_model_served() {
-    uv run python -c "
+    /home/yiqingxi/.local/bin/uv run python -c "
 from benchmarks.utils.llm_config import load_llm_config
 from openhands.sdk.llm import Message, TextContent
 llm = load_llm_config('${CONFIG_FILE}')

@@ -9,7 +9,7 @@ export OPENHANDS_EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export EVAL_AGENT_SERVER_IMAGE="ghcr.io/hybrid-gym/eval-agent-server"
 export RUNTIME_API_KEY=$REMOTE_KEY
 
-uv run swebench-infer .llm_config/${CONFIG_NAME}.json \
+/home/yiqingxi/.local/bin/uv run swebench-infer .llm_config/${CONFIG_NAME}.json \
     --dataset princeton-nlp/SWE-bench_Verified \
     --select benchmarks/swebench/easy50_instances.txt \
     --split test \
@@ -53,4 +53,4 @@ done
 
 python benchmarks/swebench/extra_eval.py --input_file $OUTPUT_DIR/output.jsonl --total_num -1
 
-uv run python benchmarks/utils/post_process_scripts/combine_completions.py $OUTPUT_DIR/output.jsonl
+/home/yiqingxi/.local/bin/uv run python benchmarks/utils/post_process_scripts/combine_completions.py $OUTPUT_DIR/output.jsonl

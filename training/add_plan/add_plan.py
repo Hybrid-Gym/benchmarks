@@ -46,7 +46,8 @@ from openai import OpenAI
 DEFAULT_BASE_DATASET = "synthetic-code-training/func_localize_claude47_1467i"
 DEFAULT_BASE_URL = "https://inference-api.nvidia.com/v1"
 # DEFAULT_MODEL = "nvidia/deepseek-ai/deepseek-v4-flash"
-DEFAULT_MODEL = "us/azure/openai/gpt-5.4"
+# DEFAULT_MODEL = "us/azure/openai/gpt-5.4"
+DEFAULT_MODEL = "nvidia/qwen/qwen3-5-397b-a17b"
 DEFAULT_CACHE_DIR = Path(__file__).parent / "cache"
 
 # ── Regex ──────────────────────────────────────────────────────────────────────
@@ -517,7 +518,10 @@ def process_dataset(
     dry_run: bool = False,
     max_retries: int = 3,
 ):
-    cache_dir = Path(cache_dir)
+    # Namespace cache under a per-dataset subdirectory so different datasets
+    # never share cached plans even when instance_ids overlap.
+    dataset_slug = re.sub(r"[^\w\-.]", "_", dataset_name)
+    cache_dir = Path(cache_dir) / dataset_slug
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading dataset: {dataset_name}")
@@ -585,6 +589,11 @@ def process_dataset(
         if plans.get("start") is None:
             print(f"  [skip] No start plan for {iid}")
             processed_rows.append(row)
+            continue
+
+        # Skip entirely if phase 1 boundary doesn't exist
+        if boundaries.get("after_phase1") is None:
+            print(f"  [skip] No phase1 boundary for {iid}")
             continue
 
         new_messages = insert_plans_all_checkpoints(messages, plans)

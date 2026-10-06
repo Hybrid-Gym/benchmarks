@@ -3,8 +3,8 @@
 #SBATCH --time=48:00:00
 #SBATCH --gres=gpu:A6000:1
 #SBATCH --job-name=agent
-#SBATCH --partition=general
-#SBATCH --qos=normal
+#SBATCH --partition=preempt
+#SBATCH --qos=preempt_qos
 #SBATCH --output=/home/yiqingxi/tmp/eval%A.out
 #SBATCH --mail-user=yiqingxi@andrew.cmu.edu
 #SBATCH --mail-type=END,FAIL
@@ -12,6 +12,9 @@
 MODEL_HF_NAME="${1:-synthetic-code-training/qwen25-coder-7b-func-localize-claude47-1467i-5e-0-00005lr-bs16-bf16}"
 NGROK_ACCOUNT_ID="${2:-1}"
 MAX_ITER="${3:-60}"
+
+#SBATCH --partition=general
+#SBATCH --qos=normal
 
 MODEL_NAME=$(basename $MODEL_HF_NAME)
 MODEL_NAME=${MODEL_NAME//./}
