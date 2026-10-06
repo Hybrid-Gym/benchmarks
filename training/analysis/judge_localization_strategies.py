@@ -11,13 +11,14 @@ Usage:
   python judge_localization_strategies.py [--n 100] [--output results.jsonl]
 """
 
-import ast
-import re
-import json
-import random
 import argparse
+import ast
+import json
 import os
+import random
+import re
 from textwrap import dedent
+
 from datasets import load_dataset
 from openai import OpenAI
 
@@ -67,7 +68,6 @@ STRATEGIES = {
             The agent never runs grep or find at all.  It navigates entirely through
             directory listings, import chain tracing, and reading files directly."""),
     },
-
     # ── File reading trigger strategies ───────────────────────────────────
     "read_after_few_candidates": {
         "label": "Read Files Only After Narrowing to Few Candidates",
@@ -129,13 +129,13 @@ _RESULT_RE = re.compile(
 )
 
 _TASK_LIST_PARAM_RE = re.compile(
-    r'(<parameter=task_list>)(.*?)(</parameter>)',
-    re.DOTALL
+    r"(<parameter=task_list>)(.*?)(</parameter>)", re.DOTALL
 )
 
 
 def fix_task_list_json(content: str) -> str:
     """Convert Python single-quote task_list values to JSON double-quote syntax."""
+
     def _replace(m: re.Match) -> str:
         raw = m.group(2)
         try:
@@ -143,6 +143,7 @@ def fix_task_list_json(content: str) -> str:
             return m.group(1) + json.dumps(parsed) + m.group(3)
         except (ValueError, SyntaxError):
             return m.group(0)
+
     return _TASK_LIST_PARAM_RE.sub(_replace, content)
 
 
@@ -164,8 +165,10 @@ def fix_messages_task_list(messages: list[dict]) -> tuple[list[dict], bool]:
 def _parse_xml_calls(content: str):
     for m in _XML_CALL_RE.finditer(content):
         tool = m.group("tool")
-        params = {pm.group("key"): pm.group("value").strip()
-                  for pm in _XML_PARAM_RE.finditer(m.group("body"))}
+        params = {
+            pm.group("key"): pm.group("value").strip()
+            for pm in _XML_PARAM_RE.finditer(m.group("body"))
+        }
         yield tool, params
 
 
@@ -174,9 +177,8 @@ def _try_json_calls(content: str):
         obj = json.loads(content)
     except Exception:
         return
-    for c in (obj.get("function_calls") or obj.get("tool_calls") or []):
-        tool = (c.get("tool") or c.get("name") or
-                c.get("function", {}).get("name", ""))
+    for c in obj.get("function_calls") or obj.get("tool_calls") or []:
+        tool = c.get("tool") or c.get("name") or c.get("function", {}).get("name", "")
         params = c.get("parameters") or c.get("arguments") or {}
         if isinstance(params, str):
             try:
@@ -204,8 +206,13 @@ def serialise_trajectory(messages: list[dict], max_chars: int = 12_000) -> str:
             calls = list(_try_json_calls(content)) or list(_parse_xml_calls(content))
             for tool, params in calls:
                 # Format each call compactly
-                cmd = (params.get("command") or params.get("cmd") or
-                       params.get("input") or params.get("subcommand") or "")
+                cmd = (
+                    params.get("command")
+                    or params.get("cmd")
+                    or params.get("input")
+                    or params.get("subcommand")
+                    or ""
+                )
                 path = params.get("path") or ""
                 vr = params.get("view_range") or ""
 
@@ -215,7 +222,11 @@ def serialise_trajectory(messages: list[dict], max_chars: int = 12_000) -> str:
                 elif tool == "terminal":
                     line = f"[terminal] {cmd[:400]}"
                 elif tool == "file_editor":
-                    line = f"[file_editor command={cmd} path={path}" + (f" view_range={vr}" if vr else "") + "]"
+                    line = (
+                        f"[file_editor command={cmd} path={path}"
+                        + (f" view_range={vr}" if vr else "")
+                        + "]"
+                    )
                 elif tool == "task_tracker":
                     line = f"[task_tracker command={cmd}]"
                 elif tool == "finish":
@@ -329,26 +340,49 @@ def judge_trajectory(
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="LLM-judge file localization strategies in func_localize dataset"
     )
-    parser.add_argument("--n", type=int, default=100,
-                        help="Number of trajectories to sample (default: 100)")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for sampling (default: 42)")
-    parser.add_argument("--split", default="train",
-                        help="Dataset split (default: train)")
-    parser.add_argument("--output", "-o", default="strategy_judgements.jsonl",
-                        help="Output JSONL path (default: strategy_judgements.jsonl)")
-    parser.add_argument("--model", default="nvidia/deepseek-ai/evals-deepseek-v4-pro",
-                        help="LLM model name")
-    parser.add_argument("--base-url", default="https://integrate.api.nvidia.com/v1",
-                        help="OpenAI-compatible API base URL")
-    parser.add_argument("--api-key-env", default="NVIDIA_API_KEY",
-                        help="Env var holding the API key (default: NVIDIA_API_KEY)")
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print one trajectory + prompt without calling the LLM")
+    parser.add_argument(
+        "--n",
+        type=int,
+        default=100,
+        help="Number of trajectories to sample (default: 100)",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Random seed for sampling (default: 42)"
+    )
+    parser.add_argument(
+        "--split", default="train", help="Dataset split (default: train)"
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        default="strategy_judgements.jsonl",
+        help="Output JSONL path (default: strategy_judgements.jsonl)",
+    )
+    parser.add_argument(
+        "--model",
+        default="nvidia/deepseek-ai/evals-deepseek-v4-pro",
+        help="LLM model name",
+    )
+    parser.add_argument(
+        "--base-url",
+        default="https://integrate.api.nvidia.com/v1",
+        help="OpenAI-compatible API base URL",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        default="NVIDIA_API_KEY",
+        help="Env var holding the API key (default: NVIDIA_API_KEY)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print one trajectory + prompt without calling the LLM",
+    )
     args = parser.parse_args()
 
     # ── API client ──────────────────────────────────────────────────────────
@@ -399,7 +433,9 @@ def main():
             if tl_changed:
                 task_list_fixed_count += 1
             traj_text = serialise_trajectory(fixed_messages)
-            print(f"[{rank+1:3d}/{len(indices)}] {instance_id} ...", end=" ", flush=True)
+            print(
+                f"[{rank + 1:3d}/{len(indices)}] {instance_id} ...", end=" ", flush=True
+            )
 
             try:
                 judgement = judge_trajectory(client, args.model, traj_text)
@@ -419,15 +455,16 @@ def main():
             print(status)
 
     # ── Aggregate summary ────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STRATEGY USAGE SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"{'Strategy':<45} {'Used':>6}  {'%':>5}")
     print("-" * 60)
 
     for key, info in STRATEGIES.items():
         used_count = sum(
-            1 for r in results
+            1
+            for r in results
             if isinstance(r["judgement"].get(key), dict)
             and r["judgement"][key].get("used") is True
         )

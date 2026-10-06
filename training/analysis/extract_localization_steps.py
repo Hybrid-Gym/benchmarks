@@ -13,17 +13,20 @@ Supported message formats:
     assistant content is a JSON object (or contains a "function_calls" key)
 """
 
-import ast
-import re
-import json
 import argparse
+import ast
+import json
+import re
 from dataclasses import dataclass, field
 from typing import Optional
+
 from datasets import load_dataset
+
 
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ToolCall:
@@ -34,10 +37,10 @@ class ToolCall:
 
 @dataclass
 class LocalizationStep:
-    step_index: int           # 0-based index among all tool calls in the trajectory
-    strategy: str             # human-readable label
+    step_index: int  # 0-based index among all tool calls in the trajectory
+    strategy: str  # human-readable label
     tool: str
-    command: Optional[str]    # bash command (terminal tool) or file_editor sub-command
+    command: Optional[str]  # bash command (terminal tool) or file_editor sub-command
     path: Optional[str]
     extra_params: dict = field(default_factory=dict)
     result: Optional[str] = None
@@ -70,13 +73,13 @@ _RESULT_RE = re.compile(
 )
 
 _TASK_LIST_PARAM_RE = re.compile(
-    r'(<parameter=task_list>)(.*?)(</parameter>)',
-    re.DOTALL
+    r"(<parameter=task_list>)(.*?)(</parameter>)", re.DOTALL
 )
 
 
 def fix_task_list_json(content: str) -> str:
     """Convert Python single-quote task_list values to JSON double-quote syntax."""
+
     def _replace(m: re.Match) -> str:
         raw = m.group(2)
         try:
@@ -84,6 +87,7 @@ def fix_task_list_json(content: str) -> str:
             return m.group(1) + json.dumps(parsed) + m.group(3)
         except (ValueError, SyntaxError):
             return m.group(0)
+
     return _TASK_LIST_PARAM_RE.sub(_replace, content)
 
 
@@ -107,8 +111,10 @@ def parse_xml_calls(content: str) -> list[ToolCall]:
     for m in _XML_CALL_RE.finditer(content):
         tool = m.group("tool")
         body = m.group("body")
-        params = {pm.group("key"): pm.group("value").strip()
-                  for pm in _XML_PARAM_RE.finditer(body)}
+        params = {
+            pm.group("key"): pm.group("value").strip()
+            for pm in _XML_PARAM_RE.finditer(body)
+        }
         calls.append(ToolCall(tool=tool, params=params))
     return calls
 
@@ -119,6 +125,7 @@ def parse_xml_result(content: str) -> Optional[str]:
 
 
 # ---- Format B: JSON embedded in content ----
+
 
 def try_parse_json_calls(content: str) -> list[ToolCall]:
     """Try to parse content as JSON with a function_calls array."""
@@ -144,6 +151,7 @@ def try_parse_json_calls(content: str) -> list[ToolCall]:
 
 # ---- Unified message parser ----
 
+
 def extract_tool_calls_from_messages(messages: list[dict]) -> list[ToolCall]:
     """
     Walk the message list and pair each assistant tool-call with the
@@ -168,7 +176,9 @@ def extract_tool_calls_from_messages(messages: list[dict]) -> list[ToolCall]:
                 # Attach result from the immediately following user message
                 result_text: Optional[str] = None
                 if i + 1 < len(messages) and messages[i + 1].get("role") == "user":
-                    result_text = parse_xml_result(messages[i + 1].get("content", "") or "")
+                    result_text = parse_xml_result(
+                        messages[i + 1].get("content", "") or ""
+                    )
                     if result_text is None:
                         # Format B: result might just be the raw user content
                         result_text = (messages[i + 1].get("content") or "").strip()
@@ -182,6 +192,7 @@ def extract_tool_calls_from_messages(messages: list[dict]) -> list[ToolCall]:
 # ---------------------------------------------------------------------------
 # Strategy classification
 # ---------------------------------------------------------------------------
+
 
 def classify_localization_strategy(call: ToolCall) -> Optional[str]:
     """
@@ -213,27 +224,30 @@ def classify_localization_strategy(call: ToolCall) -> Optional[str]:
         return None
 
     if tool == "terminal":
-        cmd = (params.get("command") or params.get("cmd") or
-               params.get("input") or "").strip()
+        cmd = (
+            params.get("command") or params.get("cmd") or params.get("input") or ""
+        ).strip()
         cmd_lower = cmd.lower()
         if not cmd:
             return None
         # grep / ripgrep
-        if re.search(r'\b(grep|rg)\b', cmd_lower):
-            if re.search(r'def\s', cmd):
+        if re.search(r"\b(grep|rg)\b", cmd_lower):
+            if re.search(r"def\s", cmd):
                 return "terminal: grep for function definition"
             return "terminal: grep for keyword in files"
         # find pipeline
-        if re.search(r'\bfind\b.*\bxargs\b', cmd_lower) or re.search(r'\bfind\b.*-name.*\.py', cmd_lower):
+        if re.search(r"\bfind\b.*\bxargs\b", cmd_lower) or re.search(
+            r"\bfind\b.*-name.*\.py", cmd_lower
+        ):
             return "terminal: find+xargs pipeline"
         # ls / tree
-        if re.search(r'\b(ls|tree)\b', cmd_lower):
+        if re.search(r"\b(ls|tree)\b", cmd_lower):
             return "terminal: directory listing (ls/tree)"
         # python ast / import checks
-        if re.search(r'py_compile|ast\.parse|get_docstring', cmd_lower):
+        if re.search(r"py_compile|ast\.parse|get_docstring", cmd_lower):
             return None  # verification, not localization
         # general exploration commands
-        if re.search(r'\b(cat|head|tail|less|more)\b', cmd_lower):
+        if re.search(r"\b(cat|head|tail|less|more)\b", cmd_lower):
             return "terminal: read file contents"
         return None  # unclassified terminal command; skip
 
@@ -243,6 +257,7 @@ def classify_localization_strategy(call: ToolCall) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Per-trajectory processing
 # ---------------------------------------------------------------------------
+
 
 def process_trajectory(record: dict) -> TrajectoryRecord:
     instance_id = record.get("instance_id", "unknown")
@@ -276,20 +291,30 @@ def process_trajectory(record: dict) -> TrajectoryRecord:
             continue
 
         path = params.get("path") or None
-        command = (params.get("command") or params.get("cmd") or
-                   params.get("input") or params.get("subcommand") or None)
-        extra = {k: v for k, v in params.items()
-                 if k not in ("command", "cmd", "input", "path", "subcommand")}
+        command = (
+            params.get("command")
+            or params.get("cmd")
+            or params.get("input")
+            or params.get("subcommand")
+            or None
+        )
+        extra = {
+            k: v
+            for k, v in params.items()
+            if k not in ("command", "cmd", "input", "path", "subcommand")
+        }
 
-        localization_steps.append(LocalizationStep(
-            step_index=idx,
-            strategy=strategy,
-            tool=call.tool,
-            command=command,
-            path=path,
-            extra_params=extra,
-            result=call.result,
-        ))
+        localization_steps.append(
+            LocalizationStep(
+                step_index=idx,
+                strategy=strategy,
+                tool=call.tool,
+                command=command,
+                path=path,
+                extra_params=extra,
+                result=call.result,
+            )
+        )
 
     return TrajectoryRecord(
         instance_id=instance_id,
@@ -302,6 +327,7 @@ def process_trajectory(record: dict) -> TrajectoryRecord:
 # ---------------------------------------------------------------------------
 # Output helpers
 # ---------------------------------------------------------------------------
+
 
 def record_to_dict(rec: TrajectoryRecord) -> dict:
     return {
@@ -317,7 +343,9 @@ def record_to_dict(rec: TrajectoryRecord) -> dict:
                 "command": s.command,
                 "path": s.path,
                 "extra_params": s.extra_params,
-                "result_preview": (s.result[:300] + "...") if s.result and len(s.result) > 300 else s.result,
+                "result_preview": (s.result[:300] + "...")
+                if s.result and len(s.result) > 300
+                else s.result,
             }
             for s in rec.localization_steps
         ],
@@ -339,33 +367,36 @@ def print_summary(records: list[TrajectoryRecord]) -> None:
 
     avg_steps = sum(step_counts) / len(step_counts) if step_counts else 0
 
-    print(f"\n{'='*60}")
-    print(f"DATASET SUMMARY")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print("DATASET SUMMARY")
+    print(f"{'=' * 60}")
     print(f"Total trajectories : {total}")
-    print(f"Resolved           : {resolved} ({100*resolved/total:.1f}%)")
+    print(f"Resolved           : {resolved} ({100 * resolved / total:.1f}%)")
     print(f"Avg localization   : {avg_steps:.1f} steps/trajectory")
-    print(f"\nStrategy distribution (total localization steps):")
+    print("\nStrategy distribution (total localization steps):")
     for strategy, count in strategy_counter.most_common():
         print(f"  {count:5d}  {strategy}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Extract file localization steps from func_localize_claude45 dataset"
     )
     parser.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         default="localization_steps.jsonl",
         help="Output JSONL file path (default: localization_steps.jsonl)",
     )
     parser.add_argument(
-        "--max-records", "-n",
+        "--max-records",
+        "-n",
         type=int,
         default=None,
         help="Max number of records to process (default: all)",
@@ -382,7 +413,7 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"Loading dataset synthetic-code-training/func_localize_claude45_1457i ...")
+    print("Loading dataset synthetic-code-training/func_localize_claude45_1457i ...")
     ds = load_dataset(
         "synthetic-code-training/func_localize_claude45_1457i",
         split=args.split,
@@ -403,7 +434,7 @@ def main():
         rec = process_trajectory(row)
         records.append(rec)
         if (i + 1) % 100 == 0:
-            print(f"  ... {i+1}/{n}")
+            print(f"  ... {i + 1}/{n}")
 
     print(f"Task-list JSON fixed: {task_list_fixed_count} / {n}")
     print_summary(records)

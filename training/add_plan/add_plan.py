@@ -42,6 +42,7 @@ from pathlib import Path
 from datasets import Dataset, load_dataset
 from openai import OpenAI
 
+
 # ── Default config ─────────────────────────────────────────────────────────────
 DEFAULT_BASE_DATASET = "synthetic-code-training/func_localize_claude47_1467i"
 DEFAULT_BASE_URL = "https://inference-api.nvidia.com/v1"
@@ -64,6 +65,7 @@ _TASK_TRACKER_PATTERN = re.compile(r"<function=task_tracker[\s>]")
 
 
 # ── LLM client ────────────────────────────────────────────────────────────────
+
 
 def make_client(base_url: str, api_key: str) -> OpenAI:
     return OpenAI(base_url=base_url, api_key=api_key)
@@ -232,7 +234,9 @@ def generate_plan(
             # Basic validation: must look like a task_tracker call
             if "<function=task_tracker" in content:
                 return content
-            print(f"  [warn] LLM output didn't contain task_tracker call: {content[:200]}")
+            print(
+                f"  [warn] LLM output didn't contain task_tracker call: {content[:200]}"
+            )
         except Exception as exc:
             print(f"  [warn] LLM call failed (attempt {attempt + 1}): {exc}")
             if attempt < max_retries - 1:
@@ -242,12 +246,15 @@ def generate_plan(
 
 # ── Cache helpers ──────────────────────────────────────────────────────────────
 
+
 def cache_path(cache_dir: Path, instance_id: str, checkpoint: str = "start") -> Path:
     safe_id = re.sub(r"[^\w\-.]", "_", instance_id)
     return cache_dir / f"{safe_id}_{checkpoint}.json"
 
 
-def load_from_cache(cache_dir: Path, instance_id: str, checkpoint: str = "start") -> str | None:
+def load_from_cache(
+    cache_dir: Path, instance_id: str, checkpoint: str = "start"
+) -> str | None:
     p = cache_path(cache_dir, instance_id, checkpoint)
     if p.exists():
         try:
@@ -274,12 +281,17 @@ def save_to_cache(
     p = cache_path(cache_dir, instance_id, checkpoint)
     p.write_text(
         json.dumps(
-            {"instance_id": instance_id, "checkpoint": checkpoint, "plan_content": plan_content}
+            {
+                "instance_id": instance_id,
+                "checkpoint": checkpoint,
+                "plan_content": plan_content,
+            }
         )
     )
 
 
 # ── Plan message builders ──────────────────────────────────────────────────────
+
 
 def count_tasks(plan_content: str) -> int:
     """Count the number of task items in the task_list."""
@@ -306,6 +318,7 @@ def make_feedback_message(n_tasks: int) -> dict:
 
 
 # ── Phase boundary detection ────────────────────────────────────────────────────
+
 
 def _is_task_tracker(msg: dict) -> bool:
     return (
@@ -364,7 +377,9 @@ def strip_task_tracker_pairs(messages: list[dict]) -> list[dict]:
             n = j - i  # batch size
             results: list[int | None] = []
             k = j
-            while k < len(messages) and messages[k]["role"] == "user" and len(results) < n:
+            while (
+                k < len(messages) and messages[k]["role"] == "user" and len(results) < n
+            ):
                 results.append(k)
                 k += 1
             results.extend([None] * (n - len(results)))
@@ -446,6 +461,7 @@ def find_phase_boundaries(messages: list[dict]) -> dict[str, int | None]:
 
 # ── Trajectory insertion ───────────────────────────────────────────────────────
 
+
 def insert_plans_all_checkpoints(
     messages: list[dict],
     plans: dict[str, str | None],
@@ -495,6 +511,7 @@ def insert_plans_all_checkpoints(
 
 
 # ── Dataset processing ─────────────────────────────────────────────────────────
+
 
 def derive_hub_repo(base_dataset: str, dataset_size: int) -> str:
     base = base_dataset.split(":")[0]
@@ -624,16 +641,17 @@ def process_dataset(
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Insert synthetic LLM-generated task_tracker planning steps "
-                    "at key phase transitions in each trajectory of a base dataset."
+        "at key phase transitions in each trajectory of a base dataset."
     )
     parser.add_argument(
         "--dataset",
         default=DEFAULT_BASE_DATASET,
         help="HuggingFace dataset name for the base trajectories "
-             f"(default: {DEFAULT_BASE_DATASET})",
+        f"(default: {DEFAULT_BASE_DATASET})",
     )
     parser.add_argument(
         "--api-key",
@@ -658,8 +676,7 @@ def main():
     parser.add_argument(
         "--output-repo",
         default=None,
-        help="HuggingFace repo to push results to "
-             "(default: {dataset}_add_plan)",
+        help="HuggingFace repo to push results to (default: {dataset}_add_plan)",
     )
     parser.add_argument(
         "--dry-run",
@@ -675,9 +692,7 @@ def main():
     args = parser.parse_args()
 
     if not args.api_key:
-        parser.error(
-            "No API key provided. Set NVIDIA_API_KEY or pass --api-key."
-        )
+        parser.error("No API key provided. Set NVIDIA_API_KEY or pass --api-key.")
 
     process_dataset(
         dataset_name=args.dataset,

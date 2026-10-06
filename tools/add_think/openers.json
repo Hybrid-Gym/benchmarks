@@ -1,0 +1,240 @@
+{
+ "strategy": [
+  [
+   "The description",
+   0.29
+  ],
+  [
+   "Based on",
+   0.242
+  ],
+  [
+   "The function",
+   0.122
+  ],
+  [
+   "I need",
+   0.1
+  ],
+  [
+   "The user",
+   0.094
+  ],
+  [
+   "Let me",
+   0.057
+  ],
+  [
+   "The task",
+   0.055
+  ],
+  [
+   "Looking at",
+   0.011
+  ],
+  [
+   "The repository",
+   0.006
+  ]
+ ],
+ "verify": [
+  [
+   "I found",
+   0.247
+  ],
+  [
+   "Looking at",
+   0.236
+  ],
+  [
+   "Let me",
+   0.159
+  ],
+  [
+   "Now I",
+   0.117
+  ],
+  [
+   "Based on",
+   0.08
+  ],
+  [
+   "I've found",
+   0.018
+  ],
+  [
+   "Now I've",
+   0.015
+  ],
+  [
+   "The description",
+   0.008
+  ],
+  [
+   "I've confirmed",
+   0.008
+  ],
+  [
+   "The function",
+   0.008
+  ],
+  [
+   "Now I'm",
+   0.006
+  ],
+  [
+   "I can",
+   0.005
+  ],
+  [
+   "I see",
+   0.005
+  ],
+  [
+   "I've now",
+   0.004
+  ],
+  [
+   "This is",
+   0.004
+  ],
+  [
+   "Now let",
+   0.004
+  ]
+ ],
+ "review": [
+  [
+   "Let me",
+   0.825
+  ],
+  [
+   "Looking at",
+   0.04
+  ],
+  [
+   "The class",
+   0.018
+  ],
+  [
+   "The description",
+   0.018
+  ],
+  [
+   "The docstring",
+   0.011
+  ],
+  [
+   "The function",
+   0.011
+  ],
+  [
+   "The task",
+   0.011
+  ]
+ ],
+ "triage": [
+  [
+   "Looking at",
+   0.37
+  ],
+  [
+   "I found",
+   0.159
+  ],
+  [
+   "Based on",
+   0.113
+  ],
+  [
+   "Let me",
+   0.071
+  ],
+  [
+   "The description",
+   0.042
+  ],
+  [
+   "Now I",
+   0.042
+  ],
+  [
+   "I've found",
+   0.027
+  ],
+  [
+   "I see",
+   0.015
+  ],
+  [
+   "There are",
+   0.013
+  ],
+  [
+   "Now I've",
+   0.011
+  ],
+  [
+   "The function",
+   0.011
+  ],
+  [
+   "The search",
+   0.01
+  ],
+  [
+   "I need",
+   0.008
+  ],
+  [
+   "The file",
+   0.006
+  ]
+ ],
+ "compose": [
+  [
+   "Now I",
+   0.547
+  ],
+  [
+   "Based on",
+   0.116
+  ],
+  [
+   "Looking at",
+   0.086
+  ],
+  [
+   "Let me",
+   0.07
+  ],
+  [
+   "I found",
+   0.022
+  ],
+  [
+   "I've confirmed",
+   0.02
+  ],
+  [
+   "Now I've",
+   0.018
+  ],
+  [
+   "I can",
+   0.012
+  ],
+  [
+   "The function",
+   0.01
+  ],
+  [
+   "Now I'm",
+   0.01
+  ],
+  [
+   "After reviewing",
+   0.006
+  ]
+ ]
+}

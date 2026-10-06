@@ -4,8 +4,10 @@ Compare pairwise instance-id overlapping rate across multiple HuggingFace datase
 Overlapping rate = num_overlap / total_instance_num (size of union)
 """
 
-from datasets import load_dataset
 from itertools import combinations
+
+from datasets import load_dataset
+
 
 DATASETS = [
     "synthetic-code-training/func_localize_claude45_1457i",
@@ -86,7 +88,9 @@ def main():
 
     print("\n" + "=" * 80)
     print("Pairwise overlap details (sorted by overlap rate desc):\n")
-    print(f"{'Dataset A':<20} {'Dataset B':<20} {'Overlap':>8} {'Union':>8} {'Rate':>8}")
+    print(
+        f"{'Dataset A':<20} {'Dataset B':<20} {'Overlap':>8} {'Union':>8} {'Rate':>8}"
+    )
     print("-" * 70)
 
     pairs = []

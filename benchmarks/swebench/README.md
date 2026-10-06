@@ -60,6 +60,19 @@ uv run swebench-infer path/to/llm_config.json \
     --workspace docker
 ```
 
+**Ready-made local run:** `scripts/run_qwen35_9b_easy50.sh` runs a model over the
+easy50 subset on the `docker` workspace with disk kept bounded (per-instance images
+are deleted as each instance finishes).
+
+```bash
+LLM_CONFIG=.llm_config/your_model.json bash benchmarks/swebench/scripts/run_qwen35_9b_easy50.sh
+```
+
+It exports `IMAGE_TAG_PREFIX` from the SDK short sha, which the `docker` workspace
+needs: the local build tags images `<sdk_short_sha>-<custom_tag>-<target>`, but
+phased-build lookup otherwise expects an extra Dockerfile content-hash segment that
+a local build never produces, so lookups would miss every image it just built.
+
 ### Remote Workspace (Scalable Cloud Evaluation)
 
 Remote workspace enables running evaluations at scale by using a cloud-based runtime API to provision containers. This is ideal for large-scale benchmark runs with high parallelization.

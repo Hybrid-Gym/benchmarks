@@ -258,6 +258,70 @@ def _pre_build_sdist() -> Path:
     return sdists[0]
 
 
+# Process-wide cache of the SDK sdist, so on-demand (inference-time) image builds reuse
+# one tarball instead of every worker running its own `uv build`.
+#
+# Without this, a rollout runs `uv build --sdist` once PER INSTANCE (~830 times per 12h
+# across four runs at 8 workers). Each one re-resolves the SDK's build requirements
+# against PyPI, which makes every instance independently dependent on PyPI being up: on
+# 2026-08-08 a resolver outage ("No solution found when resolving: setuptools...")
+# failed 154 distinct instances, 96 of them terminally after all 4 attempts. With the
+# memo it is one build per process per launch, so the same outage costs at most one.
+#
+# This restores commit 7aa84aa, which was reverted in 5f28846 the next day. The revert
+# was right at the time: the memo removed the ~0.9s stagger that the per-instance builds
+# had been providing, and that exposed a process-wide `os.chdir` race in the SDK's
+# sdist extraction which deleted the CWD and killed a whole run. That race is now fixed
+# in the SDK working tree (`_extract_tarball` extracts to an explicit dest instead of
+# chdir'ing), so the amplifier is gone. Do not re-land this if that fix is ever lost --
+# check `grep -c "from contextlib import chdir"` on the SDK's docker/build.py is 0.
+#
+# Deliberately NOT reinstating 7aa84aa's cross-process fcntl lock: with the memo each
+# process builds exactly once per launch (4 builds total across the box), so there is
+# essentially nothing left to serialise, and the lock added a shared lock-file path on a
+# multi-tenant box plus a way to wedge every worker behind one slow build.
+_SHARED_SDIST: Path | None = None
+_SHARED_SDIST_FAILED_AT: float | None = None
+_SHARED_SDIST_LOCK = Lock()
+# Long enough not to re-run a failing build per instance, short enough that a launch
+# which starts DURING a PyPI outage still recovers once it clears, rather than falling
+# back to per-instance builds for the rest of a multi-day run.
+_SHARED_SDIST_RETRY_SECONDS = 900.0
+
+
+def get_shared_sdist() -> Path | None:
+    """Return a process-wide prebuilt SDK sdist, or None if one can't be built.
+
+    Returning None is safe: callers fall back to letting each image build make its own
+    sdist, which is the pre-existing behaviour rather than a hard failure.
+
+    The tarball (a couple of MB in a mkdtemp dir) is intentionally kept for the life of
+    the process, so unlike `_prepare_cached_sdist` below there is no cleanup hook.
+    """
+    global _SHARED_SDIST, _SHARED_SDIST_FAILED_AT
+    with _SHARED_SDIST_LOCK:
+        if _SHARED_SDIST is not None and _SHARED_SDIST.is_file():
+            return _SHARED_SDIST
+        if (
+            _SHARED_SDIST_FAILED_AT is not None
+            and time.monotonic() - _SHARED_SDIST_FAILED_AT < _SHARED_SDIST_RETRY_SECONDS
+        ):
+            return None
+        try:
+            _SHARED_SDIST = _pre_build_sdist()
+        except Exception as e:
+            _SHARED_SDIST = None
+            _SHARED_SDIST_FAILED_AT = time.monotonic()
+            logger.warning(
+                "Could not pre-build shared SDK sdist; each image build will make its "
+                "own (one PyPI round-trip per instance): %s",
+                e,
+            )
+            return None
+        _SHARED_SDIST_FAILED_AT = None
+        return _SHARED_SDIST
+
+
 @contextlib.contextmanager
 def _prepare_cached_sdist():
     cached_sdist_path: Path | None = None
@@ -509,6 +573,8 @@ def ensure_local_image(
         custom_tag=custom_tag,
         target=target,
         push=False,
+        # None on failure, which is exactly the old per-build behaviour.
+        cached_sdist=get_shared_sdist(),
     )
     logger.info(f"Image build output: {output}")
     if output.error is not None:

@@ -123,6 +123,23 @@ uv run hybridgym-funclocalize-infer .llm_config/config.json \
     --n-limit 5
 ```
 
+### Multi-model rollout pipeline
+
+`scripts/pipeline_runner.sh` drives the full rollout -> retry -> combine -> filter ->
+push sequence for a queue of models, one model at a time (sequential, so clone
+bandwidth and disk pressure don't compound). Each step writes a `.done` stamp, so
+re-running the script after an interruption resumes instead of redoing work.
+
+```bash
+tmux new -s funclocalize-pipeline
+export HF_TOKEN=hf_...            # or `huggingface-cli login`; only the push step needs it
+bash benchmarks/hybridgym_funclocalize/scripts/pipeline_runner.sh
+```
+
+Edit the `QUEUE` array at the top to set the models to run; each entry is
+`tag:llm_config:hf_repo_base[:prompt_template]`. Long runs must live in tmux, not a
+shell tied to a terminal session.
+
 ### Evaluating Results
 
 ```bash

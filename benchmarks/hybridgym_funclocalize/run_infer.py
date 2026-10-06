@@ -228,6 +228,7 @@ class FuncLocalizeEvaluation(Evaluation):
         self, instance: EvalInstance, workspace: RemoteWorkspace
     ) -> EvalOutput:
         """Clone repo, remove docstrings, run agent, collect patch."""
+        original_base_commit = str(instance.data["base_commit"])
         agent_llm = build_eval_llm(self.metadata.llm)
         tools = self._get_tools(preset=self.metadata.tool_preset)
         if self.metadata.enable_delegation:
@@ -261,10 +262,13 @@ class FuncLocalizeEvaluation(Evaluation):
         instance.data["_workspace_dir_name"] = workspace_dir_name
         repo_path = f"/workspace/{workspace_dir_name}"
 
-        # Preserve the original base_commit from the dataset so retry attempts
-        # don't accidentally use the re-init commit hash from a previous attempt.
-        original_base_commit = instance.data.get("_original_base_commit") or instance.data["base_commit"]
-        instance.data["_original_base_commit"] = original_base_commit
+        # Clone repository
+        res = workspace.execute_command(
+            f"git clone https://github.com/{instance.data['repo']}.git {repo_path}",
+            timeout=600.0,
+        )
+        if res.exit_code != 0:
+            raise RuntimeError(f"Failed to clone repo: {res.stderr}")
 
         # Clone repository with an extended timeout (execute_command default is 30s
         # which is too short for large repos; pass timeout=600 explicitly).
@@ -285,8 +289,7 @@ class FuncLocalizeEvaluation(Evaluation):
         # Blobless clones download blobs on-demand during checkout, which can be slow for large
         # repos — pass an explicit timeout to avoid the 30s default.
         res = workspace.execute_command(
-            f"cd {repo_path} && git checkout {original_base_commit} && git reset --hard",
-            timeout=600.0,
+            f"cd {repo_path} && git checkout {original_base_commit} && git reset --hard"
         )
         if res.exit_code != 0:
             raise RuntimeError(f"Failed to checkout base commit: {res.stderr}")
@@ -314,11 +317,13 @@ class FuncLocalizeEvaluation(Evaluation):
         if res.exit_code != 0:
             logger.warning("Git re-init failed: %s", res.stderr)
 
-        # Capture new HEAD as base_commit for later diff
+        # Capture the re-initialized HEAD for later diff without mutating
+        # the dataset's original base commit, which must stay stable across retries.
+        diff_base_commit = original_base_commit
         head_res = workspace.execute_command(f"cd {repo_path} && git rev-parse HEAD")
         if head_res.exit_code == 0:
-            instance.data["base_commit"] = head_res.stdout.strip()
-            logger.info("Captured base_commit: %s", instance.data["base_commit"])
+            diff_base_commit = head_res.stdout.strip()
+            logger.info("Captured diff base_commit: %s", diff_base_commit)
 
         # --- Run agent ---
         persist_callback = build_event_persistence_callback(
@@ -351,11 +356,10 @@ class FuncLocalizeEvaluation(Evaluation):
             f"cd {repo_path} && git commit --no-verify -m 'Agent changes' || true"
         )
 
-        base_commit = instance.data["base_commit"]
-        logger.info("Extracting git patch: base_commit=%s", base_commit)
+        logger.info("Extracting git patch: base_commit=%s", diff_base_commit)
 
         git_patch_result = workspace.execute_command(
-            f"cd {repo_path} && git --no-pager diff --no-color {base_commit} HEAD"
+            f"cd {repo_path} && git --no-pager diff --no-color {diff_base_commit} HEAD"
         )
         if git_patch_result.exit_code != 0:
             logger.warning(

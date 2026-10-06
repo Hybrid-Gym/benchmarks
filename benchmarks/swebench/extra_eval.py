@@ -423,7 +423,14 @@ def get_tool_call_distribution(history, instance_id=0, duplicate_thresh=3):
                 ("apply_patch",),
             ]
             # python/bash inline write patterns: e.g. python3 -c "...open(..., 'w')..."
-            PYTHON_WRITE_PATTERNS = ["'w'", '"w"', "'a'", '"a"', ".write(", "writelines("]
+            PYTHON_WRITE_PATTERNS = [
+                "'w'",
+                '"w"',
+                "'a'",
+                '"a"',
+                ".write(",
+                "writelines(",
+            ]
 
             def _is_edit_cmd(cmd):
                 if any(cmd.startswith(k) for k in EDIT_CMD_LIST):
@@ -432,7 +439,11 @@ def get_tool_call_distribution(history, instance_id=0, duplicate_thresh=3):
                     if all(p in cmd for p in patterns):
                         return True
                 # python/bash -c with file write
-                if (cmd.startswith("python ") or cmd.startswith("python3 ") or cmd.startswith("bash ")) and "-c" in cmd:
+                if (
+                    cmd.startswith("python ")
+                    or cmd.startswith("python3 ")
+                    or cmd.startswith("bash ")
+                ) and "-c" in cmd:
                     if any(p in cmd for p in PYTHON_WRITE_PATTERNS):
                         return True
                 return False
@@ -638,135 +649,134 @@ if __name__ == "__main__":
         for line_idx, line in enumerate(f):
             data = json.loads(line)
             all_data.append(data)
-            
+
     # only keep the last instance with the same instance_id
     instance_id2data = defaultdict(list)
     for data in all_data:
         instance_id2data[data["instance_id"]] = data
     all_data = list(instance_id2data.values())
-    
+
     for data in all_data:
-            num_lines += 1
-            try:
-                instance_id = data["instance_id"]
-                generated_patch = data["test_result"]["git_patch"]
-                if len(SUBSET_IDS) > 0:
-                    if instance_id not in SUBSET_IDS:
-                        continue
-            except Exception:
-                print("Error: git_patch not found in data")
-                print(data["instance_id"])
-                continue
+        num_lines += 1
+        try:
+            instance_id = data["instance_id"]
+            generated_patch = data["test_result"]["git_patch"]
+            if len(SUBSET_IDS) > 0:
+                if instance_id not in SUBSET_IDS:
+                    continue
+        except Exception:
+            print("Error: git_patch not found in data")
+            print(data["instance_id"])
+            continue
 
-            if len(data["history"]) <= 4:
-                continue
+        if len(data["history"]) <= 4:
+            continue
 
-            patch_dicts = parse_git_patch(generated_patch)
-            comment_only_flag = False
-            for patch_dict in patch_dicts:
-                if patch_dict["filename"] in instance_id2file_paths.get(
-                    instance_id, set()
+        patch_dicts = parse_git_patch(generated_patch)
+        comment_only_flag = False
+        for patch_dict in patch_dicts:
+            if patch_dict["filename"] in instance_id2file_paths.get(instance_id, set()):
+                if check_add_comments_only(patch_dict):
+                    comment_only_flag = True
+                    break
+
+        if comment_only_flag:
+            comment_only_count += 1
+
+        never_call_tools_flag, no_tool_call_step_num = never_call_tools(data["history"])
+        if never_call_tools_flag:
+            never_call_tools_count += 1
+            # from IPython import embed; embed(); exit()
+
+        total_no_tool_call_step_num += no_tool_call_step_num
+
+        avg_word_count = get_avg_word_count(data["history"])
+        avg_word_count_list.append(avg_word_count)
+
+        if instance_id in id2resolved:
+            resolved_count += id2resolved[instance_id]
+
+        # Get golden file paths for this instance
+        golden_file_paths = instance_id2file_paths.get(instance_id, set())
+
+        coarse_localization_flag = False
+        for file_path in golden_file_paths:
+            if history_has_file_paths(data["history"], file_path):
+                coarse_localization_flag = True
+                break
+
+        correct_coarse_localization_count += coarse_localization_flag
+
+        edit_localization_flag = False
+        for file_path in golden_file_paths:
+            if edit_history_has_file_paths(data["history"], file_path):
+                edit_localization_flag = True
+                break
+
+        correct_edit_localization_count += edit_localization_flag
+
+        # localization accuracy
+        if generated_patch:
+            non_empty_count += 1
+            non_empty_set.add(instance_id)
+
+            # Get generated file paths
+            generated_file_paths = patch2file_paths(generated_patch)
+
+            # Check if any generated file path matches any golden file path
+            if golden_file_paths and generated_file_paths:
+                # Check for intersection between golden and generated file paths
+                intersection = golden_file_paths.intersection(generated_file_paths)
+                if intersection:
+                    correct_localization_count += 1
+                    success_lozalization_set.add(instance_id)
+
+        # Tool call distribution analysis
+        (
+            agent_steps,
+            tool_call_counts,
+            successful_tool_call_counts,
+            has_consecutive_duplicates_flag,
+        ) = get_tool_call_distribution(data["history"], data["instance_id"])
+        if has_consecutive_duplicates_flag:
+            stuck_in_loop_count += 1
+            stuck_in_loop_set.add(instance_id)
+        # if data["error"] is not None and "loop" in data["error"].lower():
+        #     stuck_in_loop_count += 1
+        #     stuck_in_loop_set.add(instance_id)
+
+        # Aggregate global counts
+        for tool_type, count in tool_call_counts.items():
+            global_tool_call_counts[tool_type] += count
+
+        for tool_type, count in successful_tool_call_counts.items():
+            global_successful_tool_call_counts[tool_type] += count
+            if tool_type == "edit":
+                # Use any attempt (not just successful) — successful edits are already
+                # captured by the non-empty patch count.
+                if (
+                    tool_call_counts.get("edit", 0) > 0
+                    and tool_type in per_instance_success_dict
                 ):
-                    if check_add_comments_only(patch_dict):
-                        comment_only_flag = True
-                        break
-
-            if comment_only_flag:
-                comment_only_count += 1
-
-            never_call_tools_flag, no_tool_call_step_num = never_call_tools(
-                data["history"]
-            )
-            if never_call_tools_flag:
-                never_call_tools_count += 1
-                # from IPython import embed; embed(); exit()
-
-            total_no_tool_call_step_num += no_tool_call_step_num
-
-            avg_word_count = get_avg_word_count(data["history"])
-            avg_word_count_list.append(avg_word_count)
-
-            if instance_id in id2resolved:
-                resolved_count += id2resolved[instance_id]
-
-            # Get golden file paths for this instance
-            golden_file_paths = instance_id2file_paths.get(instance_id, set())
-
-            coarse_localization_flag = False
-            for file_path in golden_file_paths:
-                if history_has_file_paths(data["history"], file_path):
-                    coarse_localization_flag = True
-                    break
-
-            correct_coarse_localization_count += coarse_localization_flag
-
-            edit_localization_flag = False
-            for file_path in golden_file_paths:
-                if edit_history_has_file_paths(data["history"], file_path):
-                    edit_localization_flag = True
-                    break
-
-            correct_edit_localization_count += edit_localization_flag
-
-            # localization accuracy
-            if generated_patch:
-                non_empty_count += 1
-                non_empty_set.add(instance_id)
-
-                # Get generated file paths
-                generated_file_paths = patch2file_paths(generated_patch)
-
-                # Check if any generated file path matches any golden file path
-                if golden_file_paths and generated_file_paths:
-                    # Check for intersection between golden and generated file paths
-                    intersection = golden_file_paths.intersection(generated_file_paths)
-                    if intersection:
-                        correct_localization_count += 1
-                        success_lozalization_set.add(instance_id)
-
-            # Tool call distribution analysis
-            (
-                agent_steps,
-                tool_call_counts,
-                successful_tool_call_counts,
-                has_consecutive_duplicates_flag,
-            ) = get_tool_call_distribution(data["history"], data["instance_id"])
-            if has_consecutive_duplicates_flag:
-                stuck_in_loop_count += 1
-                stuck_in_loop_set.add(instance_id)
-            # if data["error"] is not None and "loop" in data["error"].lower():
-            #     stuck_in_loop_count += 1
-            #     stuck_in_loop_set.add(instance_id)
-
-            # Aggregate global counts
-            for tool_type, count in tool_call_counts.items():
-                global_tool_call_counts[tool_type] += count
-
-            for tool_type, count in successful_tool_call_counts.items():
-                global_successful_tool_call_counts[tool_type] += count
-                if tool_type == "edit":
-                    # Use any attempt (not just successful) — successful edits are already
-                    # captured by the non-empty patch count.
-                    if tool_call_counts.get("edit", 0) > 0 and tool_type in per_instance_success_dict:
-                        per_instance_success_dict[tool_type] += 1
-                elif count > 0 and tool_type in per_instance_success_dict:
                     per_instance_success_dict[tool_type] += 1
+            elif count > 0 and tool_type in per_instance_success_dict:
+                per_instance_success_dict[tool_type] += 1
 
-            infra_error_flag = False
-            total_count += 1
-            trajectory_length.append(len(data["history"]))
-            agent_steps_length.append(len(agent_steps))
-            if len(agent_steps) > 0:
-                if _get_action_type(agent_steps[-1]) != "finish":
-                    if (
-                        data["error"] is not None
-                        and "loop" not in data["error"].lower()
-                        and "maximum iteration" not in data["error"].lower()
-                    ):
-                        infra_error_count += 1
-                        infra_error_flag = True
-            if not infra_error_flag:
-                lines_with_results.append(line)
+        infra_error_flag = False
+        total_count += 1
+        trajectory_length.append(len(data["history"]))
+        agent_steps_length.append(len(agent_steps))
+        if len(agent_steps) > 0:
+            if _get_action_type(agent_steps[-1]) != "finish":
+                if (
+                    data["error"] is not None
+                    and "loop" not in data["error"].lower()
+                    and "maximum iteration" not in data["error"].lower()
+                ):
+                    infra_error_count += 1
+                    infra_error_flag = True
+        if not infra_error_flag:
+            lines_with_results.append(line)
 
     if args.update_file:
         print(

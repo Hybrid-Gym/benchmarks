@@ -69,6 +69,45 @@ def remove_files_from_patch(git_patch, files):
     return result
 
 
+def remove_noise_from_patch(git_patch):
+    """Drop ``__pycache__``/``*.pyc`` and ``r2e_tests/`` hunks from a patch.
+
+    They are never part of a real fix, but since ``git apply`` is atomic one such
+    hunk rejects the whole patch, silently failing the source fix. R2E-Gym diffs
+    source only, so stripping them matches its behavior.
+    """
+    if not git_patch:
+        return git_patch
+
+    def _is_noise(path):
+        return (
+            path.endswith(".pyc")
+            or "__pycache__/" in path
+            or path.startswith("r2e_tests/")
+        )
+
+    diff_pattern = r"diff --git [^\n]*\n"
+    diff_matches = list(re.finditer(diff_pattern, git_patch))
+    if not diff_matches:
+        return git_patch
+
+    filtered = []
+    for i, match in enumerate(diff_matches):
+        start = match.start()
+        end = (
+            diff_matches[i + 1].start() if i + 1 < len(diff_matches) else len(git_patch)
+        )
+        diff = git_patch[start:end]
+        header = re.match(r"diff --git a/(.+) b/(.+)", diff.split("\n")[0])
+        if header:
+            file_a, file_b = header.groups()
+            if _is_noise(file_a) or _is_noise(file_b):
+                continue
+        filtered.append(diff)
+
+    return "".join(filtered)
+
+
 def remove_binary_diffs(patch_text):
     """
     Remove binary file diffs from a git patch.

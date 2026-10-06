@@ -13,10 +13,11 @@ Statistics computed per dataset:
   (5) Same as (3) but threshold <=30
 """
 
-import re
 import json
-import sys
+import re
+
 from datasets import load_dataset
+
 
 # ---------------------------------------------------------------------------
 # Parsing helpers (adapted from extract_localization_steps.py)
@@ -48,8 +49,10 @@ def parse_xml_calls(content):
     for m in _XML_CALL_RE.finditer(content):
         tool = m.group("tool")
         body = m.group("body")
-        params = {pm.group("key"): pm.group("value").strip()
-                  for pm in _XML_PARAM_RE.finditer(body)}
+        params = {
+            pm.group("key"): pm.group("value").strip()
+            for pm in _XML_PARAM_RE.finditer(body)
+        }
         calls.append(ToolCall(tool=tool, params=params))
     return calls
 
@@ -69,8 +72,7 @@ def try_parse_json_calls(content):
         return []
     calls = []
     for c in calls_raw:
-        tool = (c.get("tool") or c.get("name") or
-                c.get("function", {}).get("name", ""))
+        tool = c.get("tool") or c.get("name") or c.get("function", {}).get("name", "")
         params = c.get("parameters") or c.get("arguments") or {}
         if isinstance(params, str):
             try:
@@ -114,6 +116,7 @@ def extract_tool_calls(messages):
 # Action classification
 # ---------------------------------------------------------------------------
 
+
 def is_keyword_search(call):
     """
     Keyword search = terminal grep/rg command, or find -name command.
@@ -121,14 +124,18 @@ def is_keyword_search(call):
     """
     if call.tool.lower() != "terminal":
         return False
-    cmd = (call.params.get("command") or call.params.get("cmd") or
-           call.params.get("input") or "").strip()
+    cmd = (
+        call.params.get("command")
+        or call.params.get("cmd")
+        or call.params.get("input")
+        or ""
+    ).strip()
     if not cmd:
         return False
     cmd_lower = cmd.lower()
-    if re.search(r'\b(grep|rg)\b', cmd_lower):
+    if re.search(r"\b(grep|rg)\b", cmd_lower):
         return True
-    if re.search(r'\bfind\b.*-name\b', cmd_lower):
+    if re.search(r"\bfind\b.*-name\b", cmd_lower):
         return True
     return False
 
@@ -139,9 +146,13 @@ def is_file_read(call):
     if tool == "file_editor":
         return (call.params.get("command") or "") == "view"
     if tool == "terminal":
-        cmd = (call.params.get("command") or call.params.get("cmd") or
-               call.params.get("input") or "").strip()
-        if re.search(r'\b(cat|head|tail|less|more)\b', cmd.lower()):
+        cmd = (
+            call.params.get("command")
+            or call.params.get("cmd")
+            or call.params.get("input")
+            or ""
+        ).strip()
+        if re.search(r"\b(cat|head|tail|less|more)\b", cmd.lower()):
             return True
     return False
 
@@ -152,12 +163,16 @@ def is_file_edit(call):
     if tool == "file_editor":
         return (call.params.get("command") or "") in ("str_replace", "insert", "create")
     if tool == "terminal":
-        cmd = (call.params.get("command") or call.params.get("cmd") or
-               call.params.get("input") or "").strip()
+        cmd = (
+            call.params.get("command")
+            or call.params.get("cmd")
+            or call.params.get("input")
+            or ""
+        ).strip()
         cmd_lower = cmd.lower()
-        if re.search(r'\bsed\s+-i\b', cmd_lower):
+        if re.search(r"\bsed\s+-i\b", cmd_lower):
             return True
-        if re.search(r'\bgit\s+apply\b', cmd_lower):
+        if re.search(r"\bgit\s+apply\b", cmd_lower):
             return True
     return False
 
@@ -168,9 +183,13 @@ def get_file_path(call):
     if tool == "file_editor":
         return call.params.get("path") or None
     if tool == "terminal":
-        cmd = (call.params.get("command") or call.params.get("cmd") or
-               call.params.get("input") or "").strip()
-        m = re.search(r'\b(?:cat|head|tail|less|more)\s+([^\s|><&;]+)', cmd)
+        cmd = (
+            call.params.get("command")
+            or call.params.get("cmd")
+            or call.params.get("input")
+            or ""
+        ).strip()
+        m = re.search(r"\b(?:cat|head|tail|less|more)\s+([^\s|><&;]+)", cmd)
         if m:
             return m.group(1)
     return None
@@ -179,6 +198,7 @@ def get_file_path(call):
 # ---------------------------------------------------------------------------
 # Grep output parsing
 # ---------------------------------------------------------------------------
+
 
 def extract_files_from_search_output(output, cmd=""):
     """
@@ -195,15 +215,17 @@ def extract_files_from_search_output(output, cmd=""):
 
     files = set()
     cmd_lower = (cmd or "").lower()
-    is_find = re.search(r'\bfind\b', cmd_lower) and not re.search(r'\b(grep|rg)\b', cmd_lower)
+    is_find = re.search(r"\bfind\b", cmd_lower) and not re.search(
+        r"\b(grep|rg)\b", cmd_lower
+    )
 
-    for line in output.split('\n'):
+    for line in output.split("\n"):
         line = line.strip()
         if not line:
             continue
 
         # "Binary file X matches"
-        m = re.match(r'Binary file (.+?) matches', line)
+        m = re.match(r"Binary file (.+?) matches", line)
         if m:
             files.add(m.group(1).strip())
             continue
@@ -211,21 +233,25 @@ def extract_files_from_search_output(output, cmd=""):
         # For find output: each non-empty line is a file path
         if is_find:
             # Skip lines that look like error messages
-            if not line.startswith('/') and not line.startswith('./') and not line.startswith('../'):
-                if '/' not in line and not re.match(r'^\S+\.\w+$', line):
+            if (
+                not line.startswith("/")
+                and not line.startswith("./")
+                and not line.startswith("../")
+            ):
+                if "/" not in line and not re.match(r"^\S+\.\w+$", line):
                     continue
             files.add(line)
             continue
 
         # grep/rg output: "filepath:..." or just "filepath"
         # Try to match "path/to/file.ext:..."
-        m = re.match(r'^((?:[./\w\-][\w./\-]*?)(?:\.\w+))(?::\d+)?:', line)
+        m = re.match(r"^((?:[./\w\-][\w./\-]*?)(?:\.\w+))(?::\d+)?:", line)
         if m:
             files.add(m.group(1))
             continue
 
         # Plain file path (grep -l output)
-        if re.match(r'^[./\w][\w./\-]*\.\w+$', line):
+        if re.match(r"^[./\w][\w./\-]*\.\w+$", line):
             files.add(line)
 
     return files
@@ -239,7 +265,7 @@ def file_in_output(target_file, files_set, raw_output):
     if not target_file:
         return False
 
-    target_basename = target_file.split('/')[-1]
+    target_basename = target_file.split("/")[-1]
 
     # Direct match
     if target_file in files_set:
@@ -247,9 +273,12 @@ def file_in_output(target_file, files_set, raw_output):
 
     # Suffix / prefix match against parsed files
     for f in files_set:
-        f_basename = f.split('/')[-1]
-        if (f.endswith(target_file) or target_file.endswith(f) or
-                f_basename == target_basename):
+        f_basename = f.split("/")[-1]
+        if (
+            f.endswith(target_file)
+            or target_file.endswith(f)
+            or f_basename == target_basename
+        ):
             return True
 
     # Fallback: check raw output text
@@ -265,11 +294,12 @@ def file_in_output(target_file, files_set, raw_output):
 # Per-trajectory analysis
 # ---------------------------------------------------------------------------
 
+
 def analyze_trajectory(messages):
     calls = extract_tool_calls(messages)
 
     # Index actions
-    keyword_searches = []   # (idx, call, files_in_output)
+    keyword_searches = []  # (idx, call, files_in_output)
     first_edit_idx = None
     first_read_edit_idx = None
     first_read_edit_call = None
@@ -283,20 +313,26 @@ def analyze_trajectory(messages):
             first_read_edit_call = call
 
         if is_keyword_search(call):
-            cmd = (call.params.get("command") or call.params.get("cmd") or
-                   call.params.get("input") or "")
+            cmd = (
+                call.params.get("command")
+                or call.params.get("cmd")
+                or call.params.get("input")
+                or ""
+            )
             files = extract_files_from_search_output(call.result or "", cmd)
             keyword_searches.append((idx, call, files))
 
     # Searches before first edit
     searches_before_first_edit = [
-        (idx, c, f) for (idx, c, f) in keyword_searches
+        (idx, c, f)
+        for (idx, c, f) in keyword_searches
         if first_edit_idx is None or idx < first_edit_idx
     ]
 
     # Searches before first read/edit
     searches_before_first_read_edit = [
-        (idx, c, f) for (idx, c, f) in keyword_searches
+        (idx, c, f)
+        for (idx, c, f) in keyword_searches
         if first_read_edit_idx is None or idx < first_read_edit_idx
     ]
 
@@ -312,7 +348,7 @@ def analyze_trajectory(messages):
         target_file = get_file_path(first_read_edit_call)
 
         if target_file:
-            for (s_idx, s_call, s_files) in searches_before_first_read_edit:
+            for s_idx, s_call, s_files in searches_before_first_read_edit:
                 if file_in_output(target_file, s_files, s_call.result or ""):
                     n_files = len(s_files)
                     for threshold in (30, 50, 100):
@@ -332,14 +368,15 @@ def analyze_trajectory(messages):
 # Dataset-level analysis
 # ---------------------------------------------------------------------------
 
+
 def analyze_dataset(dataset_name):
     print(f"\nLoading {dataset_name} ...", flush=True)
     ds = load_dataset(dataset_name, split="train", trust_remote_code=True)
     n = len(ds)
     print(f"Total trajectories: {n}", flush=True)
 
-    stat1 = 0   # >1 keyword search before first edit
-    stat2 = 0   # >1 keyword search overall
+    stat1 = 0  # >1 keyword search before first edit
+    stat2 = 0  # >1 keyword search overall
     stat3 = {30: 0, 50: 0, 100: 0}  # covered within threshold (denominator = all)
     has_read_edit_with_path = 0
 
@@ -358,22 +395,40 @@ def analyze_dataset(dataset_name):
                     stat3[t] += 1
 
         if (i + 1) % 100 == 0:
-            print(f"  ... {i+1}/{n}", flush=True)
+            print(f"  ... {i + 1}/{n}", flush=True)
 
-    print(f"\n{'='*65}")
+    print(f"\n{'=' * 65}")
     print(f"Dataset: {dataset_name}")
-    print(f"{'='*65}")
+    print(f"{'=' * 65}")
     print(f"Total trajectories                         : {n}")
-    print(f"(1) >1 kw-search before first file-edit    : {stat1:5d}  ({100*stat1/n:.1f}%)")
-    print(f"(2) >1 kw-search overall                   : {stat2:5d}  ({100*stat2/n:.1f}%)")
-    print(f"")
-    print(f"    [Trajectories w/ identifiable first     ")
-    print(f"     read/edit file path]                  : {has_read_edit_with_path:5d}  ({100*has_read_edit_with_path/n:.1f}%)")
-    print(f"")
-    print(f"(3) File covered, <=50 files in search out : {stat3[50]:5d}  ({100*stat3[50]/n:.1f}%) [of all] / ({100*stat3[50]/has_read_edit_with_path:.1f}%) [of identifiable]" if has_read_edit_with_path else "")
-    print(f"(4) File covered, <=100 files in search out: {stat3[100]:5d}  ({100*stat3[100]/n:.1f}%) [of all] / ({100*stat3[100]/has_read_edit_with_path:.1f}%) [of identifiable]" if has_read_edit_with_path else "")
-    print(f"(5) File covered, <=30 files in search out : {stat3[30]:5d}  ({100*stat3[30]/n:.1f}%) [of all] / ({100*stat3[30]/has_read_edit_with_path:.1f}%) [of identifiable]" if has_read_edit_with_path else "")
-    print(f"{'='*65}\n")
+    print(
+        f"(1) >1 kw-search before first file-edit    : {stat1:5d}  ({100 * stat1 / n:.1f}%)"
+    )
+    print(
+        f"(2) >1 kw-search overall                   : {stat2:5d}  ({100 * stat2 / n:.1f}%)"
+    )
+    print("")
+    print("    [Trajectories w/ identifiable first     ")
+    print(
+        f"     read/edit file path]                  : {has_read_edit_with_path:5d}  ({100 * has_read_edit_with_path / n:.1f}%)"
+    )
+    print("")
+    print(
+        f"(3) File covered, <=50 files in search out : {stat3[50]:5d}  ({100 * stat3[50] / n:.1f}%) [of all] / ({100 * stat3[50] / has_read_edit_with_path:.1f}%) [of identifiable]"
+        if has_read_edit_with_path
+        else ""
+    )
+    print(
+        f"(4) File covered, <=100 files in search out: {stat3[100]:5d}  ({100 * stat3[100] / n:.1f}%) [of all] / ({100 * stat3[100] / has_read_edit_with_path:.1f}%) [of identifiable]"
+        if has_read_edit_with_path
+        else ""
+    )
+    print(
+        f"(5) File covered, <=30 files in search out : {stat3[30]:5d}  ({100 * stat3[30] / n:.1f}%) [of all] / ({100 * stat3[30] / has_read_edit_with_path:.1f}%) [of identifiable]"
+        if has_read_edit_with_path
+        else ""
+    )
+    print(f"{'=' * 65}\n")
 
 
 # ---------------------------------------------------------------------------
